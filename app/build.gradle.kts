@@ -73,6 +73,71 @@ chaquopy {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 环境适配：部分 Windows 环境下 os.rmdir 对非空目录同样返回成功，
+// Chaquopy 清理依赖头文件时会级联删除整个 ABI 目录并导致构建失败。
+// 这里把它的 removedirs 换成"只逐级删除空目录"的安全实现。
+// （在正常环境下该补丁是等价的，无副作用）
+// ---------------------------------------------------------------------------
+fun patchChaquopyPipInstall(buildDir: File) {
+    val helper = """
+def safe_removedirs(path):
+    # 只逐级删除空目录，避免非空目录被误删
+    while True:
+        try:
+            if os.listdir(path):
+                return
+            os.rmdir(path)
+        except OSError:
+            return
+        head, tail = os.path.split(path)
+        if not tail:
+            return
+        path = head
+
+
+def safe_renames(src, dst):
+    # 等价于 os.renames，但不做源目录的级联清理
+    dstdir = os.path.dirname(dst)
+    if dstdir and not os.path.exists(dstdir):
+        os.makedirs(dstdir)
+    os.rename(src, dst)
+
+
+""".trimIndent() + "\n"
+    listOf("debug", "release").forEach { variant ->
+        val file = File(buildDir, "python/env/$variant/Lib/site-packages/chaquopy/pip_install.py")
+        if (file.exists()) {
+            var text = file.readText()
+            if (!text.contains("safe_removedirs")) {
+                text = text.replace(
+                    "os.removedirs(dirname(path))",
+                    "safe_removedirs(dirname(path))"
+                )
+                text = text.replace(
+                    "    os.renames(src, dst)",
+                    "    safe_renames(src, dst)"
+                )
+                text = text.replace(
+                    "def remove(path, remove_empty_dirs=False):",
+                    helper + "def remove(path, remove_empty_dirs=False):"
+                )
+                file.writeText(text)
+                println("已为 $variant 打上 Chaquopy 目录清理安全补丁")
+            }
+        }
+    }
+}
+
+tasks.matching {
+    it.name.startsWith("installDebugPythonRequirements") ||
+            it.name.startsWith("installReleasePythonRequirements")
+}.configureEach {
+    doFirst {
+        patchChaquopyPipInstall(layout.buildDirectory.get().asFile)
+    }
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

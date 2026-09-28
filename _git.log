@@ -9,3 +9,14 @@
 file and the HEAD:
     _git.log
 (use -f to force removal)
+git.exe : warning: in the working copy of '.gitignore', LF will be replaced by 
+CRLF the next time Git touches it
+所在位置 行:457 字符: 1
++ & $git add -A 2>&1 | Out-File -FilePath $log -Append -Encoding UTF8
++ ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: in the... Git touches it 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ca5c9e1 鍒濆鍖? 鎺ュ叆 Chaquopy 杩愯鐜骞舵惌寤鸿秴鏄熻剼鏈父椹昏繍琛?APP
+ M _git.log
