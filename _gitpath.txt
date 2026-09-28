@@ -1,0 +1,4 @@
+﻿False
+C:\Users\Admin\.workbuddy\binaries\PortableGit\versions\1.2.0\cmd\git.exe
+C:\Users\Admin\.workbuddy\binaries\PortableGit\versions\1.2.0\mingw64\bin\git.exe
+

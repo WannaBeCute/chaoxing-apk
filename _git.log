@@ -1,0 +1,11 @@
+﻿git.exe : error: the following file has staged content different from both the
+所在位置 行:456 字符: 1
++ & $git rm --cached _git.log _gitpath.txt -q 2>&1 | Out-File -FilePath ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (error: the foll...t from both the 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+file and the HEAD:
+    _git.log
+(use -f to force removal)
