@@ -39,10 +39,10 @@ import com.cxrunner.app.data.InputRequest
 import com.cxrunner.app.data.NOTIFY_PROVIDERS
 import com.cxrunner.app.data.RunMode
 import com.cxrunner.app.data.TIKU_PROVIDERS
-import com.cxrunner.app.data.ThemeMode
 import com.cxrunner.app.data.parseConfigIni
 import com.cxrunner.app.data.renderConfigIni
 import com.cxrunner.app.ui.components.ActionButton
+import com.cxrunner.app.ui.theme.ThemeMode
 import com.cxrunner.app.ui.components.ConfirmDialog
 import com.cxrunner.app.ui.components.DropdownItem
 import com.cxrunner.app.ui.components.InputPromptDialog
