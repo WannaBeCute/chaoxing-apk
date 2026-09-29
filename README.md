@@ -3,7 +3,7 @@
 把开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
 打包成一个可以在 Android 上**长期后台运行**的 APP，并做成非开发者也能直接上手的界面。
 
-> 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0，仅用于学习交流，禁止用于盈利。
+> 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
 >
 > 本仓库为 APK 打包源码：<https://github.com/WannaBeCute/chaoxing-apk>
 
@@ -178,3 +178,15 @@ app/src/main/
 │   └── help/quickstart.md       ★ 帮助页 Markdown（可放配图）
 └── res/raw/config_template.ini  配置模板（生成 config.ini 的骨架）
 ```
+
+---
+
+## 七、许可证
+
+本项目遵循 **GNU General Public License v3.0**（GPL-3.0），全文见仓库根目录的 [`LICENSE`](LICENSE)。
+
+上游项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) 同样以 GPL-3.0 发布，
+本仓库作为其打包工程，属于 GPL-3.0 意义上的衍生作品，因此沿用同一许可证。
+
+> 仅供学习交流，禁止用于盈利或商业用途。使用本工具产生的任何后果由使用者自行承担，
+> 与原作者及打包者无关。
