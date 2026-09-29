@@ -1,6 +1,6 @@
-# 超星助手（Chaoxing Runner）
+# 超星助手
 
-把开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
+将开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
 打包成一个可以在 Android 上**长期后台运行**的 APP，并做成非开发者也能直接上手的界面。
 
 > 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
