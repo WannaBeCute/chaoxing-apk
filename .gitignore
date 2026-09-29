@@ -17,5 +17,7 @@
 .cxx
 local.properties
 .kotlin
+# 本地构建产物（APK / 源码归档），不随仓库分发
+/dist/
 # 本地 AI 助手的工作缓存（含本机路径等，不随仓库分发）
 /.workbuddy/
