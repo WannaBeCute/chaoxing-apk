@@ -3,7 +3,7 @@ package com.cxrunner.app.ui.components
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -71,6 +72,22 @@ fun LogConsole(
 ) {
     val scrollState = rememberScrollState()
     val shape = RoundedCornerShape(10.dp)
+
+    // 日志里的 ANSI 颜色码在渲染时解析成 SpanStyle，控制字符一并清掉。
+    // 只依赖 text / 调色板，重新解析整段文本在 3000 行量级下也只有几毫秒。
+    val palette = rememberAnsiPalette()
+    val fallbackColor = if (text.isEmpty()) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val displayText = remember(text, palette, fallbackColor) {
+        if (text.isEmpty()) {
+            AnnotatedString("（暂无日志，点击「开始运行」启动脚本）")
+        } else {
+            ansiToAnnotatedString(text, palette, fallbackColor)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -117,15 +134,10 @@ fun LogConsole(
                 ) {
                     SelectionContainer {
                         Text(
-                            text = text.ifEmpty { "（暂无日志，点击「开始运行」启动脚本）" },
+                            text = displayText,
                             fontSize = fontSize.sp,
                             lineHeight = (fontSize + 4).sp,
                             fontFamily = FontFamily.Monospace,
-                            color = if (text.isEmpty()) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
                         )
                     }
                 }
@@ -179,7 +191,10 @@ fun LogConsole(
 }
 
 /**
- * 极简纵向滚动条：按比例显示滑块位置，支持按住拖动。
+ * 极简纵向滚动条。
+ *
+ * 交互：**点哪儿跳哪儿**，按住可以自由拖动（滑块中心跟随手指），
+ * 拖动时滑块高亮。为了让"可以点击"这件事可见，轨道画了一条非常淡的底线。
  */
 @Composable
 private fun SimpleVerticalScrollbar(
@@ -190,39 +205,75 @@ private fun SimpleVerticalScrollbar(
     var dragging by remember { mutableStateOf(false) }
     val idleColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
     val activeColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
 
     BoxWithConstraints(
-        modifier = modifier.fillMaxHeight().width(12.dp),
+        modifier = modifier
+            .fillMaxHeight()
+            .width(ScrollbarTouchWidth)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        dragging = true
+                        val trackPx = size.height.toFloat().coerceAtLeast(1f)
+
+                        fun jumpTo(y: Float) {
+                            val thumb = thumbPxFor(trackPx, state.maxValue)
+                            val maxOffset = (trackPx - thumb).coerceAtLeast(1f)
+                            val ratio = ((y - thumb / 2f) / maxOffset).coerceIn(0f, 1f)
+                            val target = (ratio * state.maxValue).toInt()
+                            scope.launch { state.scrollTo(target) }
+                        }
+
+                        jumpTo(down.position.y)
+                        down.consume()
+
+                        val pointerId = down.id
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                            if (!change.pressed) break
+                            jumpTo(change.position.y)
+                            change.consume()
+                        }
+                        dragging = false
+                    }
+                }
+            },
         contentAlignment = Alignment.TopCenter,
     ) {
         val density = LocalDensity.current
         val trackPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
         val maxValue = state.maxValue.toFloat().coerceAtLeast(1f)
-        val thumbPx = (trackPx * trackPx / (trackPx + maxValue)).coerceIn(30f, trackPx)
+        val thumbPx = thumbPxFor(trackPx, state.maxValue)
         val maxOffset = (trackPx - thumbPx).coerceAtLeast(1f)
         val offsetPx = (state.value / maxValue * maxOffset).coerceIn(0f, maxOffset)
 
+        // 极淡的轨道底线，提示这里可以点
+        Box(
+            modifier = Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(1.dp))
+                .background(trackColor),
+        )
         Box(
             modifier = Modifier
                 .width(8.dp)
                 .height(with(density) { thumbPx.toDp() })
                 .offset { IntOffset(0, offsetPx.roundToInt()) }
                 .clip(RoundedCornerShape(4.dp))
-                .background(if (dragging) activeColor else idleColor)
-                .pointerInput(maxOffset, maxValue) {
-                    detectVerticalDragGestures(
-                        onDragStart = { dragging = true },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
-                    ) { _, dragAmount ->
-                        val delta = dragAmount / maxOffset * maxValue
-                        scope.launch {
-                            state.scrollTo(
-                                (state.value + delta).roundToInt().coerceIn(0, state.maxValue)
-                            )
-                        }
-                    }
-                },
+                .background(if (dragging) activeColor else idleColor),
         )
     }
+}
+
+/** 滚动条可点击 / 可拖动的触摸区宽度（视觉上滑块仍是 8dp） */
+private val ScrollbarTouchWidth = 16.dp
+
+/** 由轨道高度与可滚动范围算出滑块高度（视觉与手势共用一套公式） */
+private fun thumbPxFor(trackPx: Float, maxValue: Int): Float {
+    val mv = maxValue.toFloat().coerceAtLeast(1f)
+    return (trackPx * trackPx / (trackPx + mv)).coerceIn(30f, trackPx)
 }

@@ -181,7 +181,7 @@ fun MainScreen(
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(
-                    "Python 脚本后台常驻运行",
+                    "刷课脚本(Python)会在后台常驻运行",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

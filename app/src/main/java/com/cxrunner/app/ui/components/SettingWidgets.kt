@@ -148,6 +148,56 @@ fun SectionCard(
     }
 }
 
+/**
+ * 分组收纳栏的头部。
+ *
+ * 卡片外观、圆角、描边与内外边距都和 [SectionCard] 的头部**完全一致**，
+ * 但它只画头部、不包裹内容：子卡片自己保留 12dp 外边距，
+ * 因此收纳栏展开后里面的设置看起来和原来一模一样。
+ */
+@Composable
+fun CollapsibleGroupHeader(
+    title: String,
+    subtitle: String? = null,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(CardShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, borderColor, CardShape)
+            .clickable { onToggle() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = if (expanded) "收起" else "展开",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
 @Composable
 fun SwitchItem(
     label: String,

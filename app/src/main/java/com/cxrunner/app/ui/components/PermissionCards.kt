@@ -1,6 +1,7 @@
 package com.cxrunner.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -85,13 +86,20 @@ private fun PermissionCard(state: PermissionCardState) {
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Icon(state.icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
-        Column {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 卡片只有 112dp 宽，标题/说明常常放不下。这里改用自动横向滚动
+            // （basicMarquee：内容放得下时静止，放不下时来回滚动，不出现滚动条），
+            // 保证长文案也能完整读到，不再被裁掉。
             Text(
                 state.title,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .basicMarquee(),
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -99,8 +107,12 @@ private fun PermissionCard(state: PermissionCardState) {
                 fontSize = 10.sp,
                 lineHeight = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .basicMarquee(),
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import com.cxrunner.app.data.parseConfigIni
 import com.cxrunner.app.data.renderConfigIni
 import com.cxrunner.app.ui.components.ActionButton
 import com.cxrunner.app.ui.theme.ThemeMode
+import com.cxrunner.app.ui.components.CollapsibleGroupHeader
 import com.cxrunner.app.ui.components.ConfirmDialog
 import com.cxrunner.app.ui.components.DangerButton
 import com.cxrunner.app.ui.components.DropdownItem
@@ -84,6 +86,16 @@ fun SettingsScreen(
     var showFactoryReset by remember { mutableStateOf(false) }
     var showCoursePicker by remember { mutableStateOf(false) }
     var cachedCourses by remember { mutableStateOf(loadCachedCourses()) }
+
+    // 「配置文件参数」收纳栏：默认收起；切到「按配置文件运行」时自动展开。
+    // 从主页「大模型配置」卡片跳进来时（tikuExpanded）也直接展开。
+    var configGroupExpanded by remember { mutableStateOf(tikuExpanded) }
+    LaunchedEffect(settings.runMode) {
+        if (settings.runMode == RunMode.CONFIG) configGroupExpanded = true
+    }
+    LaunchedEffect(tikuExpanded) {
+        if (tikuExpanded) configGroupExpanded = true
+    }
 
     Column(
         modifier = Modifier
@@ -160,15 +172,32 @@ fun SettingsScreen(
                         val mode = RunMode.entries.first { it.label == label }
                         onChange(settings.copy(runMode = mode))
                     },
-                    desc = "直接运行 = python main.py；按配置文件运行 = python main.py -c config.ini",
+                    desc = "直接运行则每次运行都要填写账号和密码；按配置文件运行则直接按照当前设置里的配置参数运行",
                 )
             }
+
+            // ---------------- 配置文件参数（收纳栏） ----------------
+            // 账号区 / 课程区 / 行为区 / 题库区 / 通知区 / 配置文件参数 这些设置
+            // 只有「按配置文件运行」时才会被读取（直接运行只透传倍速/并发/重试等少数参数），
+            // 所以统一收进一个可折叠的收纳栏，默认收起，切到该模式时自动展开。
+            CollapsibleGroupHeader(
+                title = "配置文件参数",
+                subtitle = if (configGroupExpanded) {
+                    "仅在「按配置文件运行」时生效 · 点击收起"
+                } else {
+                    "仅在「按配置文件运行」时生效 · 点击展开"
+                },
+                expanded = configGroupExpanded,
+                onToggle = { configGroupExpanded = !configGroupExpanded },
+            )
+
+            if (configGroupExpanded) {
 
             // ---------------- 账号区 ----------------
             SectionCard(title = "账号区", subtitle = "[common] 登录方式") {
                 SwitchItem(
                     label = "使用 Cookie 登录",
-                    desc = "开启后忽略账号密码，直接读取 cookies.txt",
+                    desc = "跳过账号密码，直接读取 cookies.txt 登录",
                     checked = config.useCookies,
                     onCheckedChange = { update { useCookies = it } },
                 )
@@ -177,16 +206,16 @@ fun SettingsScreen(
                         label = "手机号",
                         value = config.username,
                         onValueChange = { update { username = it } },
-                        placeholder = "请输入手机号（首次使用为空）",
+                        placeholder = "请输入手机号",
                     )
                     TextFieldItem(
                         label = "密码",
                         value = config.password,
                         onValueChange = { update { password = it } },
                         password = true,
-                        placeholder = "请输入密码（首次使用为空）",
+                        placeholder = "请输入密码",
                     )
-                    MonoText("留空运行时会在日志区弹出输入框，临时输入手机号与密码。")
+                    MonoText("注意：要先让本程序成功登录一次，下次使用才能直接用Cookie进行登录")
                 } else {
                     ActionButton(text = "编辑 cookies.txt", onClick = onEditCookies, modifier = Modifier.fillMaxWidth())
                     MonoText("路径：${AppFiles.cookiesFile.absolutePath}")
@@ -397,7 +426,7 @@ fun SettingsScreen(
             }
 
             // ---------------- 配置文件 ----------------
-            SectionCard(title = "配置文件参数", subtitle = "输出格式与 config_template.ini 完全一致") {
+            SectionCard(title = "配置文件", subtitle = "可预览当前配置文件。若配置文件发生错误，可点击恢复默认重新配置") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ActionButton(
                         text = "预览文本",
@@ -412,6 +441,8 @@ fun SettingsScreen(
                 }
                 MonoText("生成路径：${AppFiles.configFile.absolutePath}")
             }
+
+            } // end of if (configGroupExpanded)
 
             // ---------------- 危险区 ----------------
             SectionCard(
