@@ -176,7 +176,7 @@ fun MainScreen(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "超星学习通助手",
+                    "超星刷课助手",
                     fontSize = 18.sp,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
