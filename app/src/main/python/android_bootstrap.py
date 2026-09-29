@@ -18,6 +18,7 @@ Android 运行桥接层 (Chaquopy)
 
 import builtins
 import collections
+import importlib.util
 import io
 import json
 import os
@@ -276,40 +277,137 @@ def _watchdog():
 # --------------------------------------------------------------------------- #
 # 脚本执行
 # --------------------------------------------------------------------------- #
-def _exec_script(path, run_name="__main__"):
-    """编译并执行一个 Python 脚本文件，等价于 `python <path>`。
+#
+# 为什么不用 runpy.run_path？
+# --------------------------
+# Chaquopy 为 assets 目录（AssetFinder）注册了自定义的 import 路径钩子，
+# 它并不要求路径必须是「目录」。于是 CPython 的 runpy.run_path 内部执行
+# `pkgutil.get_importer(path)` 时，会把 main.py 这个**文件路径**当成一个
+# 可导入的包，从而走进 "把路径塞进 sys.path 再 import __main__" 的分支，
+# 最终抛出：
+#
+#     ImportError: can't find '__main__' module in '.../app/main.py'
+#
+# 另外，Chaquopy 打进 APK 的是编译后的 .pyc（见 assets/chaquopy/app.imy），
+# 运行时由 AssetFinder 虚拟提供，磁盘上**不一定**存在同名的 .py 文件。
+# 因此这里按「能拿到什么就用什么」的顺序加载入口，语义始终等于 `python main.py`。
+# --------------------------------------------------------------------------- #
 
-    为什么不用 runpy.run_path？
-    --------------------------
-    Chaquopy 为 assets 目录（AssetFinder）注册了自定义的 import 路径钩子，
-    它并不要求路径必须是「目录」。于是 CPython 的 runpy.run_path 内部执行
-    `pkgutil.get_importer(path)` 时，会把 main.py 这个**文件路径**当成一个
-    可导入的包，从而走进 "把路径塞进 sys.path 再 import __main__" 的分支，
-    最终抛出：
+ENTRY_MODULE = "main"
 
-        ImportError: can't find '__main__' module in '.../app/main.py'
 
-    这里改为自己 compile + exec，语义与 `python main.py` 一致，且不依赖
-    任何 importer 行为，在 Chaquopy 上稳定可用。
-    """
-    with open(path, "rb") as fp:
-        source = fp.read()
-    # 与 py_compile / runpy 保持一致：用 lf 换行，避免 CRLF 影响行号
-    source = source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    code = compile(source, path, "exec")
-
-    mod_globals = {
-        "__name__": run_name,
+def _entry_globals(path):
+    """构造等价于 `python main.py` 的模块全局字典。"""
+    return {
+        "__name__": "__main__",
         "__file__": path,
         "__cached__": None,
         "__doc__": None,
         "__loader__": None,
-        "__package__": run_name.rpartition(".")[0],
+        "__package__": "",
         "__spec__": None,
         "__builtins__": builtins,
     }
+
+
+def _code_from_file(path):
+    """从磁盘文件读取代码：.py 走 compile，.pyc 走 marshal。"""
+    with open(path, "rb") as fp:
+        data = fp.read()
+    if path.endswith(".pyc"):
+        # 3.7+ 的 pyc 头部固定 16 字节（magic + flags + 时间戳/哈希 + 大小）
+        import marshal
+        return marshal.loads(data[16:])
+    # 与 py_compile / runpy 保持一致：统一为 lf，避免 CRLF 影响行号
+    data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return compile(data, path, "exec")
+
+
+def _exec_script(path, run_name="__main__"):
+    """直接执行磁盘上的脚本文件（等价于 `python <path>`）。"""
+    code = _code_from_file(path)
+    mod_globals = _entry_globals(path)
+    mod_globals["__name__"] = run_name
+    mod_globals["__package__"] = run_name.rpartition(".")[0]
     exec(code, mod_globals)
     return mod_globals
+
+
+def _safe_listdir(path):
+    try:
+        return sorted(os.listdir(path))
+    except Exception as exc:
+        return ["<%s>" % exc]
+
+
+def _run_entry():
+    """执行入口脚本，返回实际使用的加载方式（写进日志方便排查）。
+
+    顺序：
+      1. 磁盘上真的存在 main.py / main.pyc  → 直接 compile / marshal 后 exec
+         （最贴近 `python main.py`，也是 Chaquopy 解包后的常见形态）
+      2. 否则交给 import 机制（AssetFinder 直接提供模块）
+    """
+    for candidate in ("main.py", "main.pyc"):
+        path = os.path.join(HERE, candidate)
+        if os.path.isfile(path):
+            _exec_script(path, run_name="__main__")
+            return "file:%s" % path
+    return _run_entry_via_import()
+
+
+def _run_entry_via_import():
+    spec = None
+    try:
+        spec = importlib.util.find_spec(ENTRY_MODULE)
+    except Exception:
+        spec = None
+
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            "找不到入口模块 %r。HERE=%s 内容=%s"
+            % (ENTRY_MODULE, HERE, _safe_listdir(HERE))
+        )
+
+    loader = spec.loader
+    origin = getattr(spec, "origin", None) or os.path.join(HERE, "main.py")
+
+    # 方式 A：把代码对象取出来，用 __main__ 身份执行（不依赖 loader 对名字的校验）
+    get_code = getattr(loader, "get_code", None)
+    if callable(get_code):
+        for name in (ENTRY_MODULE, "__main__"):
+            code = None
+            try:
+                code = get_code(name)
+            except Exception:
+                code = None
+            if code is not None:
+                exec(code, _entry_globals(origin))
+                return "code:%s" % origin
+
+    # 方式 B：让 loader 以 __main__ 的身份加载
+    try:
+        spec.name = "__main__"
+        loader.name = "__main__"
+        module = importlib.util.module_from_spec(spec)
+        module.__package__ = ""
+        module.__file__ = origin
+        sys.modules["__main__"] = module
+        loader.exec_module(module)
+        if getattr(module, "__name__", None) == "__main__":
+            return "import:%s" % origin
+    except Exception:
+        pass
+
+    # 方式 C：按真实模块名加载，再显式调用入口函数 main()
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[ENTRY_MODULE] = module
+    loader.exec_module(module)
+    entry_main = getattr(module, "main", None)
+    if callable(entry_main):
+        entry_main()
+        return "call:%s" % origin
+    raise ImportError("无法执行入口模块 %r（%s）" % (ENTRY_MODULE, origin))
 
 
 # --------------------------------------------------------------------------- #
@@ -374,24 +472,10 @@ def start(params_json):
     _log("启动命令: main.py %s" % " ".join(argv[1:]))
     _log("=" * 52)
 
-    entry = os.path.join(HERE, "main.py")
     code = 0
-    if not os.path.isfile(entry):
-        code = 1
-        _log("找不到入口脚本: %s" % entry)
-        _log("请检查 app/src/main/python/main.py 是否被正确打包进 APK。")
-        try:
-            writer.flush()
-        except Exception:
-            pass
-        STATE["stopped"] = True
-        time.sleep = _real_sleep
-        builtins.input = _real_input
-        _write_status("finished", code)
-        return code
-
+    entry_desc = None
     try:
-        _exec_script(entry, run_name="__main__")
+        entry_desc = _run_entry()
     except SystemExit as e:  # 脚本主动退出（ argparse -h 等）
         code = int(e.code) if isinstance(e.code, int) else (0 if e.code is None else 1)
     except KeyboardInterrupt:
@@ -409,6 +493,8 @@ def start(params_json):
         time.sleep = _real_sleep
         _remove(STATE["stop_flag"])
         _remove(STATE["req_path"])
+        if entry_desc:
+            _log("入口加载方式: %s" % entry_desc)
         _log("=" * 52)
         _log("运行结束，退出码: %d" % code)
         _log("=" * 52)
