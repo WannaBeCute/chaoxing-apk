@@ -12,8 +12,8 @@
 ## 应用截图
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/8a44982b-0cd3-4fe0-b22d-c0a0d09fbac3" width="500" />
-  <img src="https://github.com/user-attachments/assets/de8e4f4a-2560-4260-b1ed-3670d1dbe70e" width="500" />
+  <img src="https://github.com/user-attachments/assets/8a44982b-0cd3-4fe0-b22d-c0a0d09fbac3" width="300" />
+  <img src="https://github.com/user-attachments/assets/de8e4f4a-2560-4260-b1ed-3670d1dbe70e" width="300" />
 </p>
 
 
