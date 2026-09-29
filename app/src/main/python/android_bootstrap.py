@@ -7,7 +7,7 @@ Android 运行桥接层 (Chaquopy)
 2. 接管 builtins.input，把命令行提问转换成「文件协议」交给 APP 弹窗，
    支持文本 / 密码 / 课程多选 / 是否确认 四种交互；
 3. 监听停止标记文件，让用户可以随时中断正在运行的脚本；
-4. 以 runpy 方式执行 main.py（等价于 `python main.py ...`）。
+4. 编译并执行 main.py（等价于 `python main.py ...`）。
 
 文件协议（全部位于 UI 目录，由 APP 传入）：
     request.json   Python -> APP  {"id", "kind", "prompt", "courses": [...]}
@@ -22,7 +22,6 @@ import io
 import json
 import os
 import re
-import runpy
 import signal
 import sys
 import threading
@@ -275,6 +274,45 @@ def _watchdog():
 
 
 # --------------------------------------------------------------------------- #
+# 脚本执行
+# --------------------------------------------------------------------------- #
+def _exec_script(path, run_name="__main__"):
+    """编译并执行一个 Python 脚本文件，等价于 `python <path>`。
+
+    为什么不用 runpy.run_path？
+    --------------------------
+    Chaquopy 为 assets 目录（AssetFinder）注册了自定义的 import 路径钩子，
+    它并不要求路径必须是「目录」。于是 CPython 的 runpy.run_path 内部执行
+    `pkgutil.get_importer(path)` 时，会把 main.py 这个**文件路径**当成一个
+    可导入的包，从而走进 "把路径塞进 sys.path 再 import __main__" 的分支，
+    最终抛出：
+
+        ImportError: can't find '__main__' module in '.../app/main.py'
+
+    这里改为自己 compile + exec，语义与 `python main.py` 一致，且不依赖
+    任何 importer 行为，在 Chaquopy 上稳定可用。
+    """
+    with open(path, "rb") as fp:
+        source = fp.read()
+    # 与 py_compile / runpy 保持一致：用 lf 换行，避免 CRLF 影响行号
+    source = source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    code = compile(source, path, "exec")
+
+    mod_globals = {
+        "__name__": run_name,
+        "__file__": path,
+        "__cached__": None,
+        "__doc__": None,
+        "__loader__": None,
+        "__package__": run_name.rpartition(".")[0],
+        "__spec__": None,
+        "__builtins__": builtins,
+    }
+    exec(code, mod_globals)
+    return mod_globals
+
+
+# --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
 def start(params_json):
@@ -332,12 +370,28 @@ def start(params_json):
     _log("=" * 52)
     _log("运行环境: Python %s @ Android" % sys.version.split()[0])
     _log("工作目录: %s" % workdir)
+    _log("脚本目录: %s" % HERE)
     _log("启动命令: main.py %s" % " ".join(argv[1:]))
     _log("=" * 52)
 
+    entry = os.path.join(HERE, "main.py")
     code = 0
+    if not os.path.isfile(entry):
+        code = 1
+        _log("找不到入口脚本: %s" % entry)
+        _log("请检查 app/src/main/python/main.py 是否被正确打包进 APK。")
+        try:
+            writer.flush()
+        except Exception:
+            pass
+        STATE["stopped"] = True
+        time.sleep = _real_sleep
+        builtins.input = _real_input
+        _write_status("finished", code)
+        return code
+
     try:
-        runpy.run_path(os.path.join(HERE, "main.py"), run_name="__main__")
+        _exec_script(entry, run_name="__main__")
     except SystemExit as e:  # 脚本主动退出（ argparse -h 等）
         code = int(e.code) if isinstance(e.code, int) else (0 if e.code is None else 1)
     except KeyboardInterrupt:
@@ -351,7 +405,7 @@ def start(params_json):
             pass
     finally:
         STATE["stopped"] = True
-        builtins.input = _real_input if "_real_input" in globals() else builtins.input
+        builtins.input = _real_input
         time.sleep = _real_sleep
         _remove(STATE["stop_flag"])
         _remove(STATE["req_path"])

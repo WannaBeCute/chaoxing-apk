@@ -1,8 +1,29 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.chaquopy)
 }
+
+// ---------------------------------------------------------------------------
+// Chaquopy 需要一个「构建机上的 Python 3.13」来安装依赖，路径因机器而异，
+// 因此不写死在仓库里。查找顺序：
+//   1) -PbuildPython=/path/to/python.exe   或   gradle.properties 里的 buildPython
+//   2) 环境变量 CHAQUOPY_BUILD_PYTHON
+//   3) local.properties 里的 buildPython（该文件不纳入版本管理）
+//   4) 兜底 "3.13"：让 Chaquopy 自己在 PATH 中查找同版本解释器
+// ---------------------------------------------------------------------------
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+val chaquopyBuildPython: String =
+    (project.findProperty("buildPython") as String?)?.takeIf { it.isNotBlank() }
+        ?: System.getenv("CHAQUOPY_BUILD_PYTHON")?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty("buildPython")?.takeIf { it.isNotBlank() }
+        ?: "3.13"
 
 android {
     namespace = "com.cxrunner.app"
@@ -44,7 +65,7 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.13"
-        buildPython("C:/Users/Admin/.workbuddy/binaries/python/versions/3.13.12/python.exe")
+        buildPython(chaquopyBuildPython)
         pip {
             // 纯 Python 依赖（Chaquopy 会从 PyPI 安装通用 wheel）
             install("requests")

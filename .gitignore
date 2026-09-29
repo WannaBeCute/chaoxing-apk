@@ -16,3 +16,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin
+# 本地 AI 助手的工作缓存（含本机路径等，不随仓库分发）
+/.workbuddy/

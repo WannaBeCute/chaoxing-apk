@@ -24,8 +24,9 @@ val NOTIFY_PROVIDERS = listOf("ServerChan", "Qmsg", "Bark", "Telegram")
 data class AppConfig(
     // ---------------- [common] ----------------
     var useCookies: Boolean = false,
-    var username: String = "xxx",
-    var password: String = "xxx",
+    // 首次使用默认为空，避免把模板里的占位值 "xxx" 当成真实账号提交
+    var username: String = "",
+    var password: String = "",
     var courseList: String = "",
     var speed: Float = 1.0f,
     var jobs: Int = 4,

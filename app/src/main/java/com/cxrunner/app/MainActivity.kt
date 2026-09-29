@@ -5,13 +5,16 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.cxrunner.app.data.AppFiles
+import com.cxrunner.app.data.AppSettings
 import com.cxrunner.app.data.SettingsStore
+import com.cxrunner.app.ui.HelpScreen
 import com.cxrunner.app.ui.MainScreen
 import com.cxrunner.app.ui.SettingsScreen
 import com.cxrunner.app.ui.components.TextEditorDialog
@@ -22,6 +25,9 @@ class MainActivity : ComponentActivity() {
     private val resumeTick = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 边到边显示：Android 15(API 35)+ 已是强制行为，这里显式开启以保证
+        // 各版本表现一致，再由 Compose 侧的 WindowInsets 负责避让系统栏。
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             var settings by remember { mutableStateOf(SettingsStore.load()) }
@@ -33,6 +39,12 @@ class MainActivity : ComponentActivity() {
 
             fun toast(message: String) {
                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+            }
+
+            fun reloadAfterReset() {
+                settings = AppSettings()
+                SettingsStore.save(settings)
+                openTikuSection = false
             }
 
             AppTheme(settings.themeMode) {
@@ -53,12 +65,23 @@ class MainActivity : ComponentActivity() {
                                 showCookies = true
                             },
                             tikuExpanded = openTikuSection,
+                            onFactoryReset = {
+                                AppFiles.factoryReset()
+                                reloadAfterReset()
+                                toast("已恢复出厂设置")
+                                screen = "main"
+                            },
                         )
+                    }
+                    "help" -> {
+                        BackHandler { screen = "main" }
+                        HelpScreen(onBack = { screen = "main" })
                     }
                     else -> MainScreen(
                         settings = settings,
                         onSettingsChange = { settings = it; SettingsStore.save(it) },
                         onOpenSettings = { screen = "settings" },
+                        onOpenHelp = { screen = "help" },
                         onEditCookies = {
                             cookiesText = try {
                                 if (AppFiles.cookiesFile.exists()) AppFiles.cookiesFile.readText() else ""

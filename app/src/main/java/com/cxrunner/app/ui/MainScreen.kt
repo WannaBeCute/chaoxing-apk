@@ -21,11 +21,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
@@ -78,6 +81,7 @@ fun MainScreen(
     settings: AppSettings,
     onSettingsChange: (AppSettings) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenHelp: () -> Unit,
     onEditCookies: () -> Unit,
     onOpenTikuSettings: () -> Unit,
     onToast: (String) -> Unit,
@@ -158,7 +162,10 @@ fun MainScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // 顶部避开状态栏 / 刘海，底部避开系统导航栏与手势条，
+            // 键盘弹出时一并避让（safeDrawing = 系统栏 ∪ 刘海 ∪ IME）
+            .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         // 顶部栏
         Row(
@@ -183,14 +190,33 @@ fun MainScreen(
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.clickable { onOpenSettings() },
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onOpenHelp() },
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        "?",
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    )
+                }
+            }
+            Row(modifier = Modifier.padding(start = 8.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.clickable { onOpenSettings() },
                 ) {
-                    Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Text(" 设置", fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text(" 设置", fontSize = 13.sp)
+                    }
                 }
             }
         }

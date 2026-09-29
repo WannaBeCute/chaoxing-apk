@@ -4,10 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -15,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +48,7 @@ import com.cxrunner.app.data.renderConfigIni
 import com.cxrunner.app.ui.components.ActionButton
 import com.cxrunner.app.ui.theme.ThemeMode
 import com.cxrunner.app.ui.components.ConfirmDialog
+import com.cxrunner.app.ui.components.DangerButton
 import com.cxrunner.app.ui.components.DropdownItem
 import com.cxrunner.app.ui.components.InputPromptDialog
 import com.cxrunner.app.ui.components.MonoText
@@ -65,6 +70,7 @@ fun SettingsScreen(
     onToast: (String) -> Unit,
     onEditCookies: () -> Unit,
     tikuExpanded: Boolean = false,
+    onFactoryReset: () -> Unit = {},
 ) {
     val config = settings.config
 
@@ -75,13 +81,16 @@ fun SettingsScreen(
 
     var showPreview by remember { mutableStateOf(false) }
     var showReset by remember { mutableStateOf(false) }
+    var showFactoryReset by remember { mutableStateOf(false) }
     var showCoursePicker by remember { mutableStateOf(false) }
     var cachedCourses by remember { mutableStateOf(loadCachedCourses()) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // 避让状态栏 / 刘海 / 导航栏 / 键盘
+            .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         // 顶部栏
         Row(
@@ -151,13 +160,16 @@ fun SettingsScreen(
                         label = "手机号",
                         value = config.username,
                         onValueChange = { update { username = it } },
+                        placeholder = "请输入手机号（首次使用为空）",
                     )
                     TextFieldItem(
                         label = "密码",
                         value = config.password,
                         onValueChange = { update { password = it } },
                         password = true,
+                        placeholder = "请输入密码（首次使用为空）",
                     )
+                    MonoText("留空运行时会在日志区弹出输入框，临时输入手机号与密码。")
                 } else {
                     ActionButton(text = "编辑 cookies.txt", onClick = onEditCookies, modifier = Modifier.fillMaxWidth())
                     MonoText("路径：${AppFiles.cookiesFile.absolutePath}")
@@ -383,6 +395,20 @@ fun SettingsScreen(
                 }
                 MonoText("生成路径：${AppFiles.configFile.absolutePath}")
             }
+
+            // ---------------- 危险区 ----------------
+            SectionCard(
+                title = "恢复出厂设置",
+                subtitle = "清空全部设置、日志与运行产物，回到首次安装状态",
+            ) {
+                DangerButton(
+                    text = "恢复出厂设置",
+                    icon = Icons.Filled.WarningAmber,
+                    onClick = { showFactoryReset = true },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                MonoText("将清除：所有设置项、运行日志、config.ini、cookies.txt、课程缓存、交互临时文件。")
+            }
         }
     }
 
@@ -415,6 +441,24 @@ fun SettingsScreen(
                 onToast("已恢复默认配置")
             },
             onDismiss = { showReset = false },
+        )
+    }
+
+    if (showFactoryReset) {
+        ConfirmDialog(
+            title = "⚠ 恢复出厂设置",
+            message = "此操作不可撤销！\n\n将会清除：\n• 全部设置项（主题、账号、课程、行为、题库、通知）\n" +
+                "• 运行日志 chaoxing.log / run.log\n" +
+                "• 生成的 config.ini\n" +
+                "• cookies.txt\n" +
+                "• 课程缓存与交互临时文件\n\n" +
+                "APP 将回到首次安装后的初始状态，是否继续？",
+            confirmText = "确认清除",
+            onConfirm = {
+                showFactoryReset = false
+                onFactoryReset()
+            },
+            onDismiss = { showFactoryReset = false },
         )
     }
 

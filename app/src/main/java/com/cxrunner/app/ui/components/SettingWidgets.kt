@@ -369,3 +369,35 @@ fun ActionButton(
 fun VerticalSpacer(height: Int) {
     androidx.compose.foundation.layout.Spacer(modifier = Modifier.heightIn(min = height.dp))
 }
+
+/** 危险操作按钮：用于「恢复出厂设置」这类不可逆动作 */
+@Composable
+fun DangerButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
+    Surface(
+        shape = CardShape,
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+        modifier = modifier
+            .clip(CardShape)
+            .border(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f), CardShape)
+            .clickable { onClick() },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(6.dp))
+            }
+            Text(text, fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}

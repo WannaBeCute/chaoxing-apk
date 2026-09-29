@@ -36,6 +36,9 @@ object SettingsStore {
                 cfg.keys().forEach { map[it] = cfg.optString(it) }
                 settings.config.applyIniValues(map)
             }
+            // 兼容旧版本：模板占位符 "xxx" 并非有效账号，一律视为「未填写」
+            if (settings.config.username.trim() == "xxx") settings.config.username = ""
+            if (settings.config.password.trim() == "xxx") settings.config.password = ""
             settings
         } catch (e: Exception) {
             settings
