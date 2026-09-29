@@ -15,13 +15,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.School
-import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -93,21 +93,38 @@ fun SettingsScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         // 顶部栏
+        // 注意：IconButton / Text 默认取 LocalContentColor，这里外层只有 Column +
+        // background，没有 Surface 提供内容色，不显式指定的话黑色主题下图标会是纯黑（看不见）。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+            IconButton(
+                onClick = onBack,
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                ),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
-            Text("设置", fontSize = 18.sp, modifier = Modifier.weight(1f))
-            IconButton(onClick = {
-                val ini = renderConfigIni(AppFiles.readTemplate(AppFiles.context), config)
-                AppFiles.configFile.writeText(ini)
-                onToast("已生成 ${AppFiles.configFile.name}")
-            }) {
+            Text(
+                "设置",
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = {
+                    val ini = renderConfigIni(AppFiles.readTemplate(AppFiles.context), config)
+                    AppFiles.configFile.writeText(ini)
+                    onToast("已生成 ${AppFiles.configFile.name}")
+                },
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                ),
+            ) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = "生成配置文件")
             }
         }
@@ -403,7 +420,6 @@ fun SettingsScreen(
             ) {
                 DangerButton(
                     text = "恢复出厂设置",
-                    icon = Icons.Filled.WarningAmber,
                     onClick = { showFactoryReset = true },
                     modifier = Modifier.fillMaxWidth(),
                 )

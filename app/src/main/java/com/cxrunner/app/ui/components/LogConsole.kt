@@ -29,10 +29,12 @@ import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +96,7 @@ fun LogConsole(
             Switch(
                 checked = autoRefresh,
                 onCheckedChange = onAutoRefreshChange,
+                colors = appSwitchColors(),
                 modifier = Modifier.padding(start = 6.dp),
             )
         }
@@ -136,28 +139,34 @@ fun LogConsole(
             }
 
             // 右侧工具栏
-            Column(
-                modifier = Modifier
-                    .width(40.dp)
-                    .fillMaxHeight()
-                    .padding(vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            // IconButton 取的是 LocalContentColor，而这里外层只有 Column + background，
+            // 没有 Surface 提供内容色，不显式指定的话黑色主题下图标会是纯黑（看不见）。
+            CompositionLocalProvider(
+                LocalContentColor provides MaterialTheme.colorScheme.onSurface
             ) {
-                IconButton(onClick = onExport, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Download, contentDescription = "导出", modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Delete, contentDescription = "清除", modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onRefresh, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onZoomIn, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.ZoomIn, contentDescription = "放大", modifier = Modifier.size(18.dp))
-                }
-                IconButton(onClick = onZoomOut, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.ZoomOut, contentDescription = "放小", modifier = Modifier.size(18.dp))
+                Column(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .fillMaxHeight()
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    IconButton(onClick = onExport, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Filled.Download, contentDescription = "导出", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Filled.Delete, contentDescription = "清除", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onRefresh, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onZoomIn, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Filled.ZoomIn, contentDescription = "放大", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onZoomOut, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Filled.ZoomOut, contentDescription = "放小", modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }

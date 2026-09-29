@@ -411,6 +411,57 @@ def _run_entry_via_import():
 
 
 # --------------------------------------------------------------------------- #
+# Android / Chaquopy 兼容补丁
+# --------------------------------------------------------------------------- #
+def _patch_multiprocessing():
+    """把 multiprocessing 的「进程级同步原语」换成线程版实现。
+
+    背景（真机实测）：
+    ------------------
+    Chaquopy 不提供 `_multiprocessing` 这个 C 扩展，所以 Android 上没有
+    进程间信号量。Chaquopy 自己也知道，`java.android.initialize_multiprocessing()`
+    会给 *context* 层的 ThreadingContext 装上 threading 版实现，但 **模块级** 的
+    `multiprocessing.Lock / Event / SimpleQueue` 依旧是 SemLock 实现，
+    一调用就抛：
+
+        File "stdlib/multiprocessing/synchronize.py", line 57, in __init__
+        OSError: No module named '_multiprocessing'
+
+    典型受害者是 loguru：`logger.add(sink, enqueue=True)` 在
+    `loguru/_handler.py:93-95` 会创建 `multiprocessing.SimpleQueue/Event/Lock`。
+    上游 `api/logger.py` 正是这么写的，于是脚本在 import 阶段就崩了。
+
+    本 APP 是单进程运行（Android 上也没有 fork），enqueue 本来就只是把写日志
+    放到后台线程，所以用 threading / queue 的等价实现替换模块级属性，
+    语义完全一致。替换的范围刻意与 Chaquopy 自己的 ThreadingContext 保持一致。
+    """
+    try:
+        import multiprocessing
+        import queue
+        import threading
+    except Exception:
+        return False
+
+    if getattr(multiprocessing, "_cxrunner_threaded", False):
+        return True
+
+    try:
+        # loguru 只用到 put / get / close，queue.SimpleQueue 完全兼容
+        multiprocessing.SimpleQueue = lambda *a, **kw: queue.SimpleQueue()
+        multiprocessing.Event = threading.Event
+        multiprocessing.Lock = threading.Lock
+        multiprocessing.RLock = threading.RLock
+        multiprocessing.Condition = threading.Condition
+        multiprocessing.Semaphore = threading.Semaphore
+        multiprocessing.BoundedSemaphore = threading.BoundedSemaphore
+        multiprocessing.Barrier = threading.Barrier
+        multiprocessing._cxrunner_threaded = True
+        return True
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
 def start(params_json):
@@ -431,6 +482,10 @@ def start(params_json):
 
     os.makedirs(workdir, exist_ok=True)
     os.makedirs(ui_dir, exist_ok=True)
+
+    # Android 没有 _multiprocessing，先给 multiprocessing 打上线程版兼容补丁，
+    # 否则 loguru 的 enqueue=True 会在 import 阶段直接抛 OSError。
+    mp_patched = _patch_multiprocessing()
 
     STATE.update({
         "workdir": workdir,
@@ -469,6 +524,7 @@ def start(params_json):
     _log("运行环境: Python %s @ Android" % sys.version.split()[0])
     _log("工作目录: %s" % workdir)
     _log("脚本目录: %s" % HERE)
+    _log("multiprocessing 兼容补丁: %s" % ("已应用" if mp_patched else "未应用"))
     _log("启动命令: main.py %s" % " ".join(argv[1:]))
     _log("=" * 52)
 

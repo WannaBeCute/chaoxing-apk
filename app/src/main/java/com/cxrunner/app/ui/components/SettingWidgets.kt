@@ -34,6 +34,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchColors
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -51,6 +53,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val CardShape = RoundedCornerShape(10.dp)
+
+/**
+ * 统一的开关配色。
+ *
+ * Material3 默认的关闭态是「outline 滑块 + surfaceVariant 轨道」，而在本工程的
+ * 黑色 / 白色两套主题里这两个颜色亮度太接近（深色下 #30363D 压 #1C2128，
+ * 浅色下 #D0D7DE 压 #EFF2F5），滑块几乎看不出来。
+ * 这里把关闭态的滑块换成 onSurfaceVariant、轨道换成 surfaceVariant，
+ * 并保留 outline 描边，两个主题下都有足够对比度。
+ */
+@Composable
+fun appSwitchColors(): SwitchColors = SwitchDefaults.colors(
+    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+    checkedTrackColor = MaterialTheme.colorScheme.primary,
+    checkedBorderColor = MaterialTheme.colorScheme.primary,
+    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+    uncheckedBorderColor = MaterialTheme.colorScheme.outline,
+    disabledCheckedThumbColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.55f),
+    disabledCheckedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+    disabledUncheckedThumbColor = MaterialTheme.colorScheme.outline,
+    disabledUncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+)
 
 @Composable
 fun SectionCard(
@@ -140,7 +165,11 @@ fun SwitchItem(
                 Text(desc, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = appSwitchColors(),
+        )
     }
 }
 
