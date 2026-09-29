@@ -1,4 +1,4 @@
-# 超星助手
+# 超星刷课助手
 
 将开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
 打包成一个可以在 Android 上**长期后台运行**的 APP，并做成非开发者也能直接上手的界面。
@@ -6,6 +6,16 @@
 > 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
 >
 > 本仓库为 APK 打包源码：<https://github.com/WannaBeCute/chaoxing-apk>
+>
+> 本项目由AI辅助生成
+
+## 应用截图
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/8a44982b-0cd3-4fe0-b22d-c0a0d09fbac3" width="500" />
+  <img src="https://github.com/user-attachments/assets/de8e4f4a-2560-4260-b1ed-3670d1dbe70e" width="500" />
+</p>
+
 
 ---
 
