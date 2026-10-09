@@ -41,6 +41,8 @@ import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.AppSettings
 import com.cxrunner.app.data.CourseItem
 import com.cxrunner.app.data.InputRequest
+import com.cxrunner.app.data.LOG_FONT_SIZE_MAX
+import com.cxrunner.app.data.LOG_FONT_SIZE_MIN
 import com.cxrunner.app.data.NOTIFY_PROVIDERS
 import com.cxrunner.app.data.RunMode
 import com.cxrunner.app.data.TIKU_PROVIDERS
@@ -163,7 +165,7 @@ fun SettingsScreen(
                 StepperItem(
                     label = "日志字号",
                     value = settings.fontSize,
-                    range = 8..24,
+                    range = LOG_FONT_SIZE_MIN..LOG_FONT_SIZE_MAX,
                     onValueChange = { onChange(settings.copy(fontSize = it)) },
                 )
                 DropdownItem(
@@ -214,13 +216,12 @@ fun SettingsScreen(
                             onValueChange = { m ->
                                 onChange(settings.copy(schedule = schedule.copy(endMinute = m.coerceIn(1, 1440))))
                             },
-                            desc = "选 24:00 表示次日零点",
                         )
                         MonoText(
                             "生效时段：${schedule.startText} — ${schedule.endText}" +
                                     if (schedule.spansNextDay) "（跨天）" else ""
                         )
-                        MonoText("提示：定时启动需要「精确闹钟」与「开机自启」权限，可在主页权限卡片里开启。")
+                        MonoText("提示：定时启动需要「精确闹钟」与「开机自启」权限")
                     }
                 }
             }
@@ -232,9 +233,9 @@ fun SettingsScreen(
             CollapsibleGroupHeader(
                 title = "配置文件参数",
                 subtitle = if (configGroupExpanded) {
-                    "仅在「按配置文件运行」时生效 · 点击收起"
+                    "仅在「按配置文件运行」模式下生效 · 点击收起"
                 } else {
-                    "仅在「按配置文件运行」时生效 · 点击展开"
+                    "仅在「按配置文件运行」模式下生效 · 点击展开"
                 },
                 expanded = configGroupExpanded,
                 onToggle = { configGroupExpanded = !configGroupExpanded },
@@ -503,7 +504,7 @@ fun SettingsScreen(
                     onClick = { showFactoryReset = true },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                MonoText("将清除：所有设置项、运行日志、config.ini、cookies.txt、课程缓存、交互临时文件。")
+                MonoText("将清除所有设置项、运行日志、config.ini、cookies.txt、课程缓存、交互临时文件")
             }
         }
     }

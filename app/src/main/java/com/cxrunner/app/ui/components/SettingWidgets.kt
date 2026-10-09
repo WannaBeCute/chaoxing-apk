@@ -421,8 +421,11 @@ fun TimeStepperItem(
             )
             MiniStepper(
                 text = "分",
+                // value / range / 回调都仍以「步长」为单位（0..11，每步 5 分钟），
+                // 只有显示的数字换算成分钟，否则会出现「加减一次只动 1 分钟」的错觉。
                 value = minute / 5,
                 range = 0..11,
+                display = { step -> (step * 5).toString() },
                 onValueChange = { step ->
                     val base = if (minuteOfDay >= 1440) 1440 else minuteOfDay / 60 * 60
                     onValueChange((base + step * 5).coerceIn(0, 1440))
@@ -442,6 +445,8 @@ private fun MiniStepper(
     range: IntRange,
     onValueChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** 显示值；不传就直接显示 value（需要"步长→实际值"换算时用它，例如分钟） */
+    display: (Int) -> String = { it.toString() },
 ) {
     Surface(shape = CardShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -451,7 +456,7 @@ private fun MiniStepper(
                 Icon(Icons.Filled.Remove, contentDescription = "减少", modifier = Modifier.size(16.dp))
             }
             Text(
-                value.toString(),
+                display(value),
                 modifier = Modifier.width(24.dp),
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,

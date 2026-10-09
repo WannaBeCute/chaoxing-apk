@@ -48,6 +48,9 @@ class RunnerService : Service() {
     private var watcher: Thread? = null
     private var stopped: Boolean = false
 
+    /** 本次运行来源（"" = 手动，"定时启动" = 闹钟拉起） */
+    private var runSource: String = ""
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -97,9 +100,11 @@ class RunnerService : Service() {
         }
 
         stopped = false
+        runSource = source ?: ""
         RunnerController.setRunning(true)
         RunnerController.setExitCode(null)
         RunnerController.setInputRequest(null)
+        RunnerController.setRunSource(source ?: "")
         val sourceText = source?.let { "（$it）" } ?: ""
         RunnerController.setStatus("运行中（${mode.label}$sourceText）")
         RunnerController.bumpLog()
@@ -164,29 +169,41 @@ class RunnerService : Service() {
                     val id = obj.optInt("id", -1)
                     if (id != lastRequestId && id >= 0) {
                         lastRequestId = id
-                        val courses = mutableListOf<CourseItem>()
-                        val arr = obj.optJSONArray("courses")
-                        if (arr != null) {
-                            for (i in 0 until arr.length()) {
-                                val c = arr.optJSONObject(i) ?: continue
-                                courses.add(
-                                    CourseItem(
-                                        id = c.optString("id"),
-                                        clazzId = c.optString("clazzId"),
-                                        title = c.optString("title"),
+                        val kind = obj.optString("kind", "text")
+
+                        // 定时启动时没人守弹窗：课程列表为空触发的「选择要刷的课程」
+                        // 必须在这里直接应答（留空 = 全部课程），否则脚本会一直卡在
+                        // input() 上、后台挂着不动。放在服务里而不是界面里，
+                        // 是为了 APP 不在前台时也能应答。
+                        if (runSource == ScheduleScheduler.SOURCE_LABEL && kind == "courses") {
+                            RunnerController.respond(id, "")
+                            updateNotification("定时启动：默认刷全部课程")
+                            RunnerController.bumpLog()
+                        } else {
+                            val courses = mutableListOf<CourseItem>()
+                            val arr = obj.optJSONArray("courses")
+                            if (arr != null) {
+                                for (i in 0 until arr.length()) {
+                                    val c = arr.optJSONObject(i) ?: continue
+                                    courses.add(
+                                        CourseItem(
+                                            id = c.optString("id"),
+                                            clazzId = c.optString("clazzId"),
+                                            title = c.optString("title"),
+                                        )
                                     )
-                                )
+                                }
                             }
-                        }
-                        RunnerController.setInputRequest(
-                            InputRequest(
-                                id = id,
-                                kind = obj.optString("kind", "text"),
-                                prompt = obj.optString("prompt", ""),
-                                courses = courses,
+                            RunnerController.setInputRequest(
+                                InputRequest(
+                                    id = id,
+                                    kind = kind,
+                                    prompt = obj.optString("prompt", ""),
+                                    courses = courses,
+                                )
                             )
-                        )
-                        updateNotification("等待输入…")
+                            updateNotification("等待输入…")
+                        }
                     }
                 } else if (RunnerController.inputRequest.value != null) {
                     RunnerController.setInputRequest(null)

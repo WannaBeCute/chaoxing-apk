@@ -26,6 +26,13 @@ import java.util.Calendar
 object ScheduleScheduler {
 
     const val ACTION_START = "com.cxrunner.app.action.SCHEDULE_START"
+
+    /**
+     * 写进 `RunnerService.EXTRA_SOURCE` 的取值，用来标记「这次是闹钟拉起的」。
+     * UI 侧据此自动应答课程选择弹窗（定时启动时没人守弹窗）。
+     */
+    const val SOURCE_LABEL = "定时启动"
+
     private const val REQUEST_CODE = 8801
     private const val TAG = "ScheduleScheduler"
 
@@ -142,7 +149,7 @@ class ScheduleReceiver : BroadcastReceiver() {
         val svc = Intent(app, RunnerService::class.java).apply {
             action = RunnerService.ACTION_START
             putExtra(RunnerService.EXTRA_MODE, RunMode.CONFIG.name)
-            putExtra(RunnerService.EXTRA_SOURCE, "定时启动")
+            putExtra(RunnerService.EXTRA_SOURCE, ScheduleScheduler.SOURCE_LABEL)
         }
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

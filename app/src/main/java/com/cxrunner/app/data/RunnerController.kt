@@ -34,6 +34,19 @@ object RunnerController {
     private val _logTick = MutableStateFlow(0)
     val logTick: StateFlow<Int> = _logTick
 
+    /**
+     * 本次运行的来源（"" = 手动启动，"定时启动" = 闹钟拉起）。
+     *
+     * 定时启动时没人守着弹窗：课程列表为空的那种「选择要刷的课程」必须自动应答，
+     * 否则脚本会一直等在 input() 上、后台卡住不动。
+     */
+    private val _runSource = MutableStateFlow("")
+    val runSource: StateFlow<String> = _runSource
+
+    fun setRunSource(source: String) {
+        _runSource.value = source
+    }
+
     fun setRunning(running: Boolean) {
         _running.value = running
     }

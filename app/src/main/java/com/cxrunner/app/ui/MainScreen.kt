@@ -66,6 +66,8 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.AppSettings
+import com.cxrunner.app.data.LOG_FONT_SIZE_MAX
+import com.cxrunner.app.data.LOG_FONT_SIZE_MIN
 import com.cxrunner.app.data.ProgressItem
 import com.cxrunner.app.data.ProgressStore
 import com.cxrunner.app.data.RunMode
@@ -74,6 +76,7 @@ import com.cxrunner.app.service.RunnerService
 import com.cxrunner.app.service.ScheduleScheduler
 import com.cxrunner.app.ui.components.InputPromptDialog
 import com.cxrunner.app.ui.components.LogConsole
+import com.cxrunner.app.ui.components.NoticeDialog
 import com.cxrunner.app.ui.components.PermissionCardRow
 import com.cxrunner.app.ui.components.PermissionCardState
 import com.cxrunner.app.ui.components.ProgressPanel
@@ -163,6 +166,27 @@ fun MainScreen(
         }
     }
 
+    // ------------------------------------------------------------------ //
+    // 定时启动 + 课程列表为空
+    //
+    // 配置文件里没填课程列表时，脚本登录完会问「选择要刷的课程」。
+    // 手动运行时弹窗问一句没问题；**定时启动时没人守着弹窗**，脚本会一直
+    // 卡在 input() 上、后台挂着不动。所以定时启动拉起的那次运行，
+    // 课程请求由 RunnerService 直接自动应答「留空」= 全部课程
+    // （见 RunnerService.watchLoop），不依赖界面是否在前台。
+    // 这里只负责在条件成立时提示用户一次。
+    // ------------------------------------------------------------------ //
+    val scheduleOn = settings.schedule.enabled && settings.runMode == RunMode.CONFIG
+    val courseListEmpty = settings.config.courseList.isBlank()
+    var noticeShown by remember { mutableStateOf(false) }
+    var showEmptyCourseNotice by remember { mutableStateOf(false) }
+    LaunchedEffect(scheduleOn, courseListEmpty) {
+        if (scheduleOn && courseListEmpty && !noticeShown) {
+            noticeShown = true
+            showEmptyCourseNotice = true
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { refreshPermission.value++ }
@@ -179,6 +203,7 @@ fun MainScreen(
             onEditCookies = onEditCookies,
             onOpenTikuSettings = onOpenTikuSettings,
             onOpenAutostart = { openAutostartSettings(context) },
+            onConfirmAutostart = { onSettingsChange(settings.copy(autostartConfirmed = true)) },
         )
     }
 
@@ -344,8 +369,8 @@ fun MainScreen(
                 val name = exportLog(context)
                 onToast(if (name != null) "已导出到下载目录：$name" else "导出失败")
             },
-            onZoomIn = { onSettingsChange(settings.copy(fontSize = (settings.fontSize + 1).coerceAtMost(24))) },
-            onZoomOut = { onSettingsChange(settings.copy(fontSize = (settings.fontSize - 1).coerceAtLeast(8))) },
+            onZoomIn = { onSettingsChange(settings.copy(fontSize = (settings.fontSize + 1).coerceAtMost(LOG_FONT_SIZE_MAX))) },
+            onZoomOut = { onSettingsChange(settings.copy(fontSize = (settings.fontSize - 1).coerceAtLeast(LOG_FONT_SIZE_MIN))) },
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -361,6 +386,14 @@ fun MainScreen(
                 if (request.kind == "confirm") RunnerController.respond(request.id, "n")
                 else RunnerController.respond(request.id, null)
             },
+        )
+    }
+
+    if (showEmptyCourseNotice) {
+        NoticeDialog(
+            message = "当前配置文件里的课程列表为空，如不补充。则自启动时默认刷全部课程",
+            confirmText = "我已了解",
+            onDismiss = { showEmptyCourseNotice = false },
         )
     }
 }
@@ -407,6 +440,7 @@ private fun buildPermissionCards(
     onEditCookies: () -> Unit,
     onOpenTikuSettings: () -> Unit,
     onOpenAutostart: (() -> Unit)? = null,
+    onConfirmAutostart: (() -> Unit)? = null,
 ): List<PermissionCardState> {
     val cards = mutableListOf<PermissionCardState>()
 
@@ -537,21 +571,72 @@ private fun buildPermissionCards(
             },
         )
 
-        // 开机自启：各厂商 ROM 的入口不统一，能找到的就直接跳过去
+        // 开机自启：各厂商 ROM 的入口不统一，能找到的就直接跳过去。
+        // 状态判定：能查（MIUI 等 AppOps）就用查询结果；查不到时看用户是否已点过确认，
+        // 否则这张卡会永远停在红色「未授权」，用户明明开了也没用。
         cards += PermissionCardState(
             id = "autostart",
             title = "开机自启",
             detail = "重启后自动恢复定时任务",
-            granted = false,
+            granted = detectAutostart(context) ?: settings.autostartConfirmed,
             grantedText = "请手动确认",
             missingText = "去设置",
             icon = Icons.Filled.PowerSettingsNew,
-            onClick = { onOpenAutostart?.invoke() },
+            onClick = {
+                onOpenAutostart?.invoke()
+                onConfirmAutostart?.invoke()
+            },
         )
     }
 
-    return cards
+    // 未授权的排在前面，但同一组内保持原来的先后顺序
+    // （sortedBy 是稳定排序：网络访问 与 大模型配置 都没授权时，仍是网络访问在前）。
+    return cards.sortedBy { it.granted }
 }
+
+/**
+ * 查询「自启动」是否已允许。
+ *
+ * AOSP 原生根本没有这个开关，各厂商ROM 各用各的 AppOps 实现；
+ * MIUI 的操作码是 `OP_AUTO_START = 10000`（隐藏 API，反射取不到，只能写字面量）。
+ *
+ * 这里用**反射按签名找方法**而不是直接调 `AppOpsManager.checkOpNoThrow(int, int, String)`：
+ * 不同 SDK 版本上那个名字存在多个重载（`(String, Int, String)` 等），
+ * 直接调会解析到错误的重载而编译失败。
+ *
+ * 返回 `true/false` 表示查到了明确结论；返回 `null` 表示**查不出来**
+ * （非 MIUI、或该 ROM 没实现这个 op），此时应由调用方退回"用户手动确认过"这个状态，
+ * 否则这张卡片会永远停在红色的「未授权」，用户明明开了也没用。
+ */
+private fun detectAutostart(context: Context): Boolean? {
+    return try {
+        val ops = context.getSystemService(Context.APP_OPS_SERVICE) ?: return null
+        val method = ops.javaClass.methods.firstOrNull {
+            it.name == "checkOpNoThrow" &&
+                    it.parameterTypes.size == 3 &&
+                    it.parameterTypes[0] == Integer.TYPE &&
+                    it.parameterTypes[1] == Integer.TYPE &&
+                    it.parameterTypes[2] == String::class.java
+        } ?: return null
+        val mode = method.invoke(ops, OP_AUTO_START, context.applicationInfo.uid, context.packageName)
+                as? Int ?: return null
+        when (mode) {
+            OP_MODE_ALLOWED -> true
+            OP_MODE_IGNORED, OP_MODE_ERRORED -> false
+            else -> null // MODE_DEFAULT 等：系统没说，不表态
+        }
+    } catch (e: Throwable) {
+        null
+    }
+}
+
+/** MIUI / 多数国产 ROM 的「自启动」AppOps 操作码 */
+private const val OP_AUTO_START = 10000
+
+// AppOpsManager.MODE_* 的字面量，避免依赖 SDK 里可能变动/隐藏的常量
+private const val OP_MODE_ALLOWED = 0
+private const val OP_MODE_IGNORED = 1
+private const val OP_MODE_ERRORED = 2
 
 /**
  * 跳转到系统「自启动管理」。

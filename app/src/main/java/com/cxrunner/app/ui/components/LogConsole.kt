@@ -1,12 +1,15 @@
 package com.cxrunner.app.ui.components
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -73,6 +77,8 @@ fun LogConsole(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    // 横向滚动状态：内容宽度超过窗口时才会出现底部滚动条
+    val hState = rememberScrollState()
     val shape = RoundedCornerShape(10.dp)
 
     // 日志里的 ANSI 颜色码在渲染时解析成 SpanStyle，控制字符一并清掉。
@@ -139,7 +145,13 @@ fun LogConsole(
                     SelectionContainer {
                         LazyColumn(
                             state = listState,
-                            modifier = Modifier.fillMaxSize(),
+                            // 横向滚动：长行（堆栈、URL）不折行，超出窗口宽度后可左右拖动。
+                            // 放在 LazyColumn 外层，子项才会以"内容宽度"参与测量。
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .horizontalScroll(hState),
+                            // 底部留白，避免最后一行被横向滚动条压住
+                            contentPadding = PaddingValues(bottom = 10.dp),
                         ) {
                             itemsIndexed(displayLines) { _, line ->
                                 Text(
@@ -160,6 +172,15 @@ fun LogConsole(
                         .align(Alignment.CenterEnd)
                         .padding(vertical = 2.dp),
                 )
+                // 底部横向滚动条：只有内容比窗口宽时才出现
+                if (hState.maxValue > 0) {
+                    SimpleHorizontalScrollbar(
+                        state = hState,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(start = 2.dp, bottom = 1.dp),
+                    )
+                }
             }
 
             // 右侧工具栏
@@ -307,3 +328,89 @@ private fun SimpleVerticalScrollbar(
 
 /** 滚动条可点击 / 可拖动的触摸区宽度（视觉上滑块仍是 8dp） */
 private val ScrollbarTouchWidth = 16.dp
+
+/**
+ * 极简横向滚动条。
+ *
+ * 与 [SimpleVerticalScrollbar] 同一套逻辑与样式，只是方向不同：
+ * **点哪儿跳哪儿**，按住可自由拖动，拖动时滑块高亮，轨道画一条很淡的底线。
+ *
+ * 滑块长度 = 窗口宽度 / 内容宽度；`ScrollState.maxValue` 就是"内容宽度 - 窗口宽度"，
+ * 所以不需要额外测量文本宽度。
+ */
+@Composable
+private fun SimpleHorizontalScrollbar(
+    state: ScrollState,
+    modifier: Modifier = Modifier,
+) {
+    val scope = rememberCoroutineScope()
+    var dragging by remember { mutableStateOf(false) }
+    val idleColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    val activeColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(ScrollbarTouchWidth)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        dragging = true
+                        val trackPx = size.width.toFloat().coerceAtLeast(1f)
+
+                        fun jumpTo(x: Float) {
+                            val maxValue = state.maxValue.toFloat().coerceAtLeast(1f)
+                            val thumb = thumbLength(trackPx, maxValue)
+                            val maxOffset = (trackPx - thumb).coerceAtLeast(1f)
+                            val ratio = ((x - thumb / 2f) / maxOffset).coerceIn(0f, 1f)
+                            scope.launch { state.scrollTo((ratio * maxValue).toInt()) }
+                        }
+
+                        jumpTo(down.position.x)
+                        down.consume()
+
+                        val pointerId = down.id
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                            if (!change.pressed) break
+                            jumpTo(change.position.x)
+                            change.consume()
+                        }
+                        dragging = false
+                    }
+                }
+            },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        val density = LocalDensity.current
+        val trackPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val maxValue = state.maxValue.toFloat().coerceAtLeast(1f)
+        val thumbPx = thumbLength(trackPx, maxValue)
+        val offsetPx = (state.value / maxValue * (trackPx - thumbPx))
+            .coerceIn(0f, (trackPx - thumbPx).coerceAtLeast(0f))
+
+        // 极淡的轨道底线，提示这里可以点
+        Box(
+            modifier = Modifier
+                .height(2.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(1.dp))
+                .background(trackColor),
+        )
+        Box(
+            modifier = Modifier
+                .width(with(density) { thumbPx.toDp() })
+                .height(8.dp)
+                .offset { IntOffset(offsetPx.roundToInt(), 0) }
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (dragging) activeColor else idleColor),
+        )
+    }
+}
+
+/** 横向滑块长度：窗口占比；至少留 30px，保证内容只多一点时也能点到 */
+private fun thumbLength(trackPx: Float, maxValue: Float): Float =
+    if (maxValue <= 0f) trackPx else (trackPx * trackPx / (trackPx + maxValue)).coerceIn(30f, trackPx)

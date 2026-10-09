@@ -608,6 +608,41 @@ def _patch_multiprocessing():
         return False
 
 
+def _patch_queue_join():
+    """让 queue.Queue.join() 在收到停止指令后立刻返回。
+
+    为什么需要（真机实测「日志里已经打了 KeyboardInterrupt，APP 却一直停在
+    「正在停止…」）：
+        上游 `JobProcessor.run()` 用 `self.task_queue.join()` 等所有章节跑完，
+        而 `worker_thread` 被 `@log_error` 包着——收到 SIGINT 后它抛出异常、
+        被装饰器记录进日志（正是你看到的那条 KeyboardInterrupt），线程就此结束。
+        队列里剩下的章节没人再取，`unfinished_tasks` 永远归不了零，
+        主线程就死等在 join() 上：脚本不退出、`status.json` 不会写成 finished，
+        APP 只能一直停在「正在停止…」。
+
+    这里只替换 join 的等待实现（逻辑与 CPython 原版一致，只是加了停止检查和
+    0.2s 超时），**不改上游任何一行代码**。
+    """
+    try:
+        import queue as _queue
+
+        if getattr(_queue.Queue.join, "_cxrunner_stop_aware", False):
+            return False
+
+        def join(self, *args, **kwargs):
+            with self.all_tasks_done:
+                while self.unfinished_tasks:
+                    if stop_requested():
+                        break
+                    self.all_tasks_done.wait(timeout=0.2)
+
+        join._cxrunner_stop_aware = True
+        _queue.Queue.join = join
+        return True
+    except Exception:
+        return False
+
+
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
@@ -633,6 +668,9 @@ def start(params_json):
     # Android 没有 _multiprocessing，先给 multiprocessing 打上线程版兼容补丁，
     # 否则 loguru 的 enqueue=True 会在 import 阶段直接抛 OSError。
     mp_patched = _patch_multiprocessing()
+
+    # 停止时不能死等在 queue.join() 上，否则脚本不退出、APP 一直停在「正在停止…」
+    join_patched = _patch_queue_join()
 
     STATE.update({
         "workdir": workdir,
@@ -672,6 +710,7 @@ def start(params_json):
     _log("工作目录: %s" % workdir)
     _log("脚本目录: %s" % HERE)
     _log("multiprocessing 兼容补丁: %s" % ("已应用" if mp_patched else "未应用"))
+    _log("停止等待(queue.join) 补丁: %s" % ("已应用" if join_patched else "未应用"))
     _log("启动命令: main.py %s" % " ".join(argv[1:]))
     _log("=" * 52)
 

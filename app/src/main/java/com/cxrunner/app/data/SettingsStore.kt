@@ -5,6 +5,16 @@ import com.cxrunner.app.ui.theme.ThemeMode
 import org.json.JSONObject
 import java.io.File
 
+/**
+ * 日志字号可调范围。
+ *
+ * 设置页步进器、日志区「放大/放小」按钮、以及读取旧配置时的兜底**共用这一套**——
+ * 之前三处各写各的（读取 8~28、步进器 8~24、缩放按钮 8~24），很容易改漏。
+ * 下限放到 5，方便在窄屏上一次性看全堆栈/URL 这类长行。
+ */
+const val LOG_FONT_SIZE_MIN = 5
+const val LOG_FONT_SIZE_MAX = 24
+
 /** APP 持久化设置 */
 data class AppSettings(
     var config: AppConfig = AppConfig(),
@@ -13,6 +23,14 @@ data class AppSettings(
     var fontSize: Int = 12,
     var autoRefresh: Boolean = true,
     var schedule: ScheduleSettings = ScheduleSettings(),
+
+    /**
+     * 用户是否已在系统里确认过「自启动」。
+     *
+     * AOSP 没有这个开关，MIUI 等厂商的实现又查不到稳定的公开 API，
+     * 所以用户点过卡片之后就用这个标记把卡片转绿，避免明明开了却一直显示「未授权」。
+     */
+    var autostartConfirmed: Boolean = false,
 )
 
 object SettingsStore {
@@ -29,8 +47,9 @@ object SettingsStore {
             val obj = JSONObject(file.readText())
             settings.themeMode = ThemeMode.fromName(obj.optString("themeMode"))
             settings.runMode = RunMode.fromName(obj.optString("runMode"))
-            settings.fontSize = obj.optInt("fontSize", 12).coerceIn(8, 28)
+            settings.fontSize = obj.optInt("fontSize", 12).coerceIn(LOG_FONT_SIZE_MIN, LOG_FONT_SIZE_MAX)
             settings.autoRefresh = obj.optBoolean("autoRefresh", true)
+            settings.autostartConfirmed = obj.optBoolean("autostartConfirmed", false)
             val sch = obj.optJSONObject("schedule")
             if (sch != null) {
                 settings.schedule = ScheduleSettings(
@@ -62,6 +81,7 @@ object SettingsStore {
             obj.put("runMode", settings.runMode.name)
             obj.put("fontSize", settings.fontSize)
             obj.put("autoRefresh", settings.autoRefresh)
+            obj.put("autostartConfirmed", settings.autostartConfirmed)
             obj.put(
                 "schedule",
                 JSONObject().apply {

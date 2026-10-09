@@ -242,6 +242,20 @@ fun ConfirmDialog(
     )
 }
 
+/** 单按钮提示弹窗：只有一个「我已了解」，没有取消 */
+@Composable
+fun NoticeDialog(
+    message: String,
+    confirmText: String,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        text = { Text(message, fontSize = 13.sp, lineHeight = 19.sp) },
+        confirmButton = { Button(onClick = onDismiss) { Text(confirmText) } },
+    )
+}
+
 @Composable
 fun SelectedIcon(selected: Boolean) {
     Icon(
