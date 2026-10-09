@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-/** 主题模式：黑色 / 白色 / 跟随系统 */
+/** 主题模式：黑色 / 白色 / 跟随系统（默认白色） */
 enum class ThemeMode(val label: String) {
     BLACK("黑色"),
     WHITE("白色"),
@@ -19,7 +19,7 @@ enum class ThemeMode(val label: String) {
 
     companion object {
         fun fromName(name: String?): ThemeMode =
-            entries.firstOrNull { it.name == name } ?: BLACK
+            entries.firstOrNull { it.name == name } ?: WHITE
     }
 }
 
@@ -61,7 +61,7 @@ private val LightScheme = lightColorScheme(
 
 @Composable
 fun AppTheme(
-    mode: ThemeMode = ThemeMode.BLACK,
+    mode: ThemeMode = ThemeMode.WHITE,
     content: @Composable () -> Unit
 ) {
     val dark = when (mode) {

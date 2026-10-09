@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -14,6 +16,7 @@ import androidx.compose.runtime.setValue
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.AppSettings
 import com.cxrunner.app.data.SettingsStore
+import com.cxrunner.app.service.ScheduleScheduler
 import com.cxrunner.app.ui.HelpScreen
 import com.cxrunner.app.ui.MainScreen
 import com.cxrunner.app.ui.SettingsScreen
@@ -45,6 +48,19 @@ class MainActivity : ComponentActivity() {
                 settings = AppSettings()
                 SettingsStore.save(settings)
                 openTikuSection = false
+                // 恢复出厂会关掉定时启动，这里同步把已登记的闹钟撤掉
+                ScheduleScheduler.sync(this@MainActivity)
+            }
+
+            // 定时启动的闹钟依赖设置项：开关、时间窗、运行模式任一变化都要重排。
+            // LaunchedEffect 保证只在这些字段真正变化时触发一次。
+            LaunchedEffect(
+                settings.schedule.enabled,
+                settings.schedule.startMinute,
+                settings.schedule.endMinute,
+                settings.runMode,
+            ) {
+                ScheduleScheduler.sync(this@MainActivity)
             }
 
             AppTheme(settings.themeMode) {

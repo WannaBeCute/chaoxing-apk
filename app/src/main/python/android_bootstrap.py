@@ -49,16 +49,69 @@ COURSE_RE = re.compile(r"ID[:：]\s*(\d+)\s+班级ID[:：]\s*(\d+)\s+课程名[:
 
 
 # --------------------------------------------------------------------------- #
+# 进度条帧识别
+# --------------------------------------------------------------------------- #
+# tqdm 用 "\r" 原地刷新进度条，bar_format 形如：
+#     TS060A7682A1.mp4:  37%|████       | 08:12/22:05
+# 每秒刷几次且**从不换行**，原样落盘就是一个视频刷出几千行
+# "\rTS060...: 0%|...| 00:01/22:05\rTS060...: 0%|..." 的垃圾，
+# 日志窗口又刷不动、也读不出内容。这里把它们从日志流里摘掉，
+# 改为写入 ui/progress.json，由 APP 侧渲染成真正的进度条。
+PROGRESS_RE = re.compile(
+    r"^(?P<name>.*?):\s*(?P<pct>\d{1,3})%\|[^|]*\|\s*"
+    r"(?P<cur>\d{1,2}:\d{2}(?::\d{2})?)\s*/\s*(?P<total>\d{1,2}:\d{2}(?::\d{2})?)"
+)
+
+# 行分隔（保留分隔符，便于判断是换行还是回车原地重画）
+_LINE_SPLIT_RE = re.compile(r"(\r\n|\r|\n)")
+
+# 光标控制序列（\x1b[A 上移、\x1b[?25l 隐藏光标……）由 tqdm 的 moveto/clear 发出，
+# 落进日志里没有意义，只留下 ESC[A 噪声。SGR（m 结尾）要保留给日志配色。
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+# progress.json 的最小写入间隔（秒）：进度条刷新很密，节流一下避免频繁写盘
+_PROGRESS_FLUSH_INTERVAL = 0.4
+
+
+def _strip_cursor_codes(text):
+    """去掉光标控制类 ANSI 序列，保留 SGR 颜色码（m 结尾）。"""
+    return _ANSI_CSI_RE.sub(lambda m: m.group(0) if m.group(0).endswith("m") else "", text)
+
+
+# --------------------------------------------------------------------------- #
 # 日志输出
 # --------------------------------------------------------------------------- #
 class LogWriter(io.TextIOBase):
-    """写入日志文件，同时保留最近若干行，用于解析课程列表。"""
+    """写入日志文件，同时保留最近若干行，用于解析课程列表。
 
-    def __init__(self, path, ring_size=600):
+    日志流里混着两类内容，这里按终端语义分流：
+
+    1. 普通文本（以 \\n 结尾）—— 原样落盘，进度条区域之外照常显示；
+    2. tqdm 的进度条刷新帧（以 \\r 开头、不换行）—— **不落盘**，
+       只解析成结构化进度写进 ui/progress.json。
+
+    否则一个 22 分钟的视频会往日志里灌 1300+ 帧 "xx.mp4: 3%|...| 00:41/22:05"，
+    日志窗口被刷屏、还会被 3000 行上限反复截断，看起来就是"一直在重复输出"。
+    """
+
+    def __init__(self, path, progress_path=None, ring_size=600):
         self._fp = open(path, "ab", buffering=0)
         self._lock = threading.Lock()
         self.ring = collections.deque(maxlen=ring_size)
+        self.progress_path = progress_path
+        # name -> {"pct", "cur", "total", "ts"}
+        self._progress = {}
+        self._last_progress_flush = 0.0
+        # 收到 \r 后，后续内容属于"原地重画"，不进日志
+        self._pending_overwrite = False
+        # 换行之前已积累的普通文本（半行日志，等下一批补全后再写）
+        self._pending_text = ""
+        # 重画期间攒下的内容，等下一次 \r / \n 结算
+        self._overwrite_text = ""
 
+    # ------------------------------------------------------------------ #
+    # 写入
+    # ------------------------------------------------------------------ #
     def write(self, s):
         if not s:
             return 0
@@ -67,16 +120,110 @@ class LogWriter(io.TextIOBase):
                 s = s.decode("utf-8", "replace")
             except Exception:
                 s = str(s)
+
         with self._lock:
-            try:
-                self._fp.write(s.encode("utf-8", "replace"))
-            except Exception:
-                pass
-            for line in s.splitlines():
-                line = line.rstrip()
-                if line:
-                    self.ring.append(line)
+            for part in _LINE_SPLIT_RE.split(s):
+                if part in ("\n", "\r\n"):
+                    # 真正的换行：本行结束，落地待写内容 + 处理重画残留
+                    self._commit_line()
+                elif part == "\r":
+                    # 回车：终端语义是"回到行首重画"，本行内容整体作废
+                    self._pending_text = ""
+                    self._resolve_overwrite()
+                    self._pending_overwrite = True
+                elif part:
+                    if self._pending_overwrite:
+                        # 重画期间的内容先攒着，等下一个 \r / \n 才能判定是
+                        # 进度条还是普通文本——tqdm 一帧可能被 write() 切成多段
+                        self._overwrite_text += part
+                    else:
+                        self._pending_text += part
+
         return len(s)
+
+    def _commit_line(self):
+        """一行结束：把积累的文本写出去。"""
+        self._resolve_overwrite()
+        self._pending_overwrite = False
+        text = self._pending_text
+        self._pending_text = ""
+        if text:
+            self._emit(text + "\n")
+
+    def _resolve_overwrite(self):
+        """结算"回车重画"期间攒下的内容。
+
+        判定顺序很重要：tqdm 的帧与 loguru 的整行日志会**粘在同一次写入**里
+        （帧没有结尾换行，紧接着就是带颜色的日志行），所以先用 PROGRESS_RE
+        从头匹配，匹配到的前缀是进度条、剩余部分是普通日志，两者分开处理。
+        """
+        text = _strip_cursor_codes(self._overwrite_text).strip()
+        self._overwrite_text = ""
+        if not text:
+            return
+
+        m = PROGRESS_RE.match(text)
+        if m:
+            name = (m.group("name") or "").strip()
+            if name:
+                self._progress[name] = {
+                    "pct": int(m.group("pct")),
+                    "cur": m.group("cur"),
+                    "total": m.group("total"),
+                    "ts": time.time(),
+                }
+                self._maybe_flush_progress()
+            text = text[m.end():].strip()
+
+        if text:
+            self._emit(text + "\n")
+
+    def _maybe_flush_progress(self):
+        now = time.time()
+        if now - self._last_progress_flush < _PROGRESS_FLUSH_INTERVAL:
+            return
+        self._last_progress_flush = now
+        self._write_progress_file()
+
+    def flush_progress(self):
+        with self._lock:
+            self._write_progress_file()
+
+    def _write_progress_file(self):
+        if not self.progress_path:
+            return
+        try:
+            payload = {
+                "time": time.time(),
+                "items": [
+                    {"name": name, "pct": v["pct"], "cur": v["cur"], "total": v["total"], "ts": v["ts"]}
+                    for name, v in self._progress.items()
+                ],
+            }
+            _atomic_write_json(self.progress_path, payload)
+        except Exception:
+            pass
+
+    def clear_progress(self, name=None):
+        with self._lock:
+            if name is None:
+                self._progress.clear()
+            else:
+                self._progress.pop(name, None)
+            self._write_progress_file()
+
+    def _emit(self, text):
+        """把清理后的日志文本真正写入文件 + 环形缓冲。"""
+        if not text:
+            return
+        try:
+            self._fp.write(text.encode("utf-8", "replace"))
+        except Exception:
+            pass
+        for line in text.splitlines():
+            line = line.strip()
+            if line:
+                self.ring.append(line)
 
     def flush(self):
         pass
@@ -507,7 +654,7 @@ def start(params_json):
     except Exception:
         pass
 
-    writer = LogWriter(log_path)
+    writer = LogWriter(log_path, progress_path=os.path.join(ui_dir, "progress.json"))
     STATE["writer"] = writer
     sys.stdout = writer
     sys.stderr = writer
@@ -552,6 +699,10 @@ def start(params_json):
         if entry_desc:
             _log("入口加载方式: %s" % entry_desc)
         _log("=" * 52)
+        try:
+            writer.clear_progress()
+        except Exception:
+            pass
         _log("运行结束，退出码: %d" % code)
         _log("=" * 52)
         _write_status("finished", code)

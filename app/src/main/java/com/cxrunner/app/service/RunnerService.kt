@@ -37,6 +37,9 @@ class RunnerService : Service() {
         const val ACTION_START = "com.cxrunner.app.action.START"
         const val ACTION_STOP = "com.cxrunner.app.action.STOP"
         const val EXTRA_MODE = "mode"
+
+        /** 启动来源（手动 / 定时启动），仅用于通知文案 */
+        const val EXTRA_SOURCE = "source"
         private const val CHANNEL_ID = "runner_channel"
         private const val NOTIF_ID = 20240921
     }
@@ -58,7 +61,10 @@ class RunnerService : Service() {
                 RunnerController.requestStop()
                 RunnerController.setStatus("正在停止…")
             }
-            ACTION_START -> startRun(intent.getStringExtra(EXTRA_MODE))
+            ACTION_START -> startRun(
+                intent.getStringExtra(EXTRA_MODE),
+                intent.getStringExtra(EXTRA_SOURCE),
+            )
             else -> {
                 // 进程被系统杀掉后重启，不自动重新运行脚本
                 stopSelf()
@@ -75,7 +81,7 @@ class RunnerService : Service() {
     }
 
     // ------------------------------------------------------------------ //
-    private fun startRun(modeName: String?) {
+    private fun startRun(modeName: String?, source: String?) {
         val mode = RunMode.fromName(modeName)
         val settings = SettingsStore.load()
 
@@ -94,7 +100,8 @@ class RunnerService : Service() {
         RunnerController.setRunning(true)
         RunnerController.setExitCode(null)
         RunnerController.setInputRequest(null)
-        RunnerController.setStatus("运行中（${mode.label}）")
+        val sourceText = source?.let { "（$it）" } ?: ""
+        RunnerController.setStatus("运行中（${mode.label}$sourceText）")
         RunnerController.bumpLog()
 
         startForegroundCompat(buildNotification("脚本正在后台运行…"))
@@ -217,6 +224,7 @@ class RunnerService : Service() {
             AppFiles.responseFile,
             AppFiles.statusFile,
             AppFiles.stopFile,
+            AppFiles.progressFile,
         ).forEach {
             try {
                 if (it.exists()) it.delete()

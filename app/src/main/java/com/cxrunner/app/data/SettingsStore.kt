@@ -8,10 +8,11 @@ import java.io.File
 /** APP 持久化设置 */
 data class AppSettings(
     var config: AppConfig = AppConfig(),
-    var themeMode: ThemeMode = ThemeMode.BLACK,
+    var themeMode: ThemeMode = ThemeMode.WHITE,
     var runMode: RunMode = RunMode.DIRECT,
     var fontSize: Int = 12,
     var autoRefresh: Boolean = true,
+    var schedule: ScheduleSettings = ScheduleSettings(),
 )
 
 object SettingsStore {
@@ -30,6 +31,14 @@ object SettingsStore {
             settings.runMode = RunMode.fromName(obj.optString("runMode"))
             settings.fontSize = obj.optInt("fontSize", 12).coerceIn(8, 28)
             settings.autoRefresh = obj.optBoolean("autoRefresh", true)
+            val sch = obj.optJSONObject("schedule")
+            if (sch != null) {
+                settings.schedule = ScheduleSettings(
+                    enabled = sch.optBoolean("enabled", false),
+                    startMinute = sch.optInt("startMinute", 8 * 60).coerceIn(0, 1439),
+                    endMinute = sch.optInt("endMinute", 24 * 60).coerceIn(1, 1440),
+                )
+            }
             val cfg = obj.optJSONObject("config")
             if (cfg != null) {
                 val map = linkedMapOf<String, String>()
@@ -53,6 +62,14 @@ object SettingsStore {
             obj.put("runMode", settings.runMode.name)
             obj.put("fontSize", settings.fontSize)
             obj.put("autoRefresh", settings.autoRefresh)
+            obj.put(
+                "schedule",
+                JSONObject().apply {
+                    put("enabled", settings.schedule.enabled)
+                    put("startMinute", settings.schedule.startMinute)
+                    put("endMinute", settings.schedule.endMinute)
+                },
+            )
             val cfg = JSONObject()
             settings.config.toIniValues().forEach { (k, v) -> cfg.put(k, v) }
             obj.put("config", cfg)

@@ -1,6 +1,5 @@
 package com.cxrunner.app.ui.components
 
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -17,10 +16,12 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -36,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,22 +72,22 @@ fun LogConsole(
     onZoomOut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scrollState = rememberScrollState()
+    val listState = rememberLazyListState()
     val shape = RoundedCornerShape(10.dp)
 
     // 日志里的 ANSI 颜色码在渲染时解析成 SpanStyle，控制字符一并清掉。
-    // 只依赖 text / 调色板，重新解析整段文本在 3000 行量级下也只有几毫秒。
     val palette = rememberAnsiPalette()
     val fallbackColor = if (text.isEmpty()) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val displayText = remember(text, palette, fallbackColor) {
-        if (text.isEmpty()) {
-            AnnotatedString("（暂无日志，点击「开始运行」启动脚本）")
-        } else {
-            ansiToAnnotatedString(text, palette, fallbackColor)
+    // 按行切分 + LazyColumn 渲染：整段丢给一个 Text 在 3000 行量级下
+    // 每次重组都要重新测量整块文本，日志刷不动、看起来就像"没有自动刷新"。
+    val lines = remember(text) { if (text.isEmpty()) emptyList() else text.split('\n') }
+    val displayLines = remember(lines, palette, fallbackColor) {
+        lines.map { line ->
+            if (line.isEmpty()) AnnotatedString("") else ansiToAnnotatedString(line, palette, fallbackColor)
         }
     }
 
@@ -126,24 +128,34 @@ fun LogConsole(
                     .fillMaxHeight()
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
+                if (lines.isEmpty()) {
+                    Text(
+                        "（暂无日志，点击「开始运行」启动脚本）",
+                        fontSize = fontSize.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
                     SelectionContainer {
-                        Text(
-                            text = displayText,
-                            fontSize = fontSize.sp,
-                            lineHeight = (fontSize + 4).sp,
-                            fontFamily = FontFamily.Monospace,
-                        )
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            itemsIndexed(displayLines) { _, line ->
+                                Text(
+                                    text = line,
+                                    fontSize = fontSize.sp,
+                                    lineHeight = (fontSize + 4).sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    softWrap = false,
+                                )
+                            }
+                        }
                     }
                 }
                 // 右侧可拖动滚动条（自绘，避免依赖版本差异较大的 Scrollbar API）
                 SimpleVerticalScrollbar(
-                    state = scrollState,
+                    state = listState,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(vertical = 2.dp),
@@ -184,9 +196,19 @@ fun LogConsole(
         }
     }
 
-    // 新日志到来时自动滚动到底部
-    LaunchedEffect(text) {
-        scrollState.scrollTo(scrollState.maxValue)
+    // 新日志到来时自动滚动到底部。
+    // 只在用户本来就贴着底部时才跟随，向上翻阅历史时不要把人强行拽回底部。
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            last >= info.totalItemsCount - 2
+        }
+    }
+    LaunchedEffect(lines.size) {
+        if (atBottom && lines.isNotEmpty()) {
+            listState.scrollToItem(lines.lastIndex)
+        }
     }
 }
 
@@ -195,10 +217,13 @@ fun LogConsole(
  *
  * 交互：**点哪儿跳哪儿**，按住可以自由拖动（滑块中心跟随手指），
  * 拖动时滑块高亮。为了让"可以点击"这件事可见，轨道画了一条非常淡的底线。
+ *
+ * 用 LazyListState 而不是 ScrollState：滚动位置用"首个可见行 / 总行数"
+ * 表示，拖动时按比例换算成目标行号。
  */
 @Composable
 private fun SimpleVerticalScrollbar(
-    state: ScrollState,
+    state: LazyListState,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -219,11 +244,17 @@ private fun SimpleVerticalScrollbar(
                         val trackPx = size.height.toFloat().coerceAtLeast(1f)
 
                         fun jumpTo(y: Float) {
-                            val thumb = thumbPxFor(trackPx, state.maxValue)
-                            val maxOffset = (trackPx - thumb).coerceAtLeast(1f)
+                            val total = state.layoutInfo.totalItemsCount
+                            if (total <= 0) return
+                            val visibleCount = state.layoutInfo.visibleItemsInfo.size
+                            val ratio0 = if (total > 0) {
+                                (visibleCount.toFloat() / total).coerceIn(0.08f, 1f)
+                            } else 1f
+                            val thumb = trackPx * ratio0
+                            val maxOffset = (trackPx * (1f - ratio0)).coerceAtLeast(1f)
                             val ratio = ((y - thumb / 2f) / maxOffset).coerceIn(0f, 1f)
-                            val target = (ratio * state.maxValue).toInt()
-                            scope.launch { state.scrollTo(target) }
+                            val target = (ratio * (total - 1)).toInt().coerceIn(0, total - 1)
+                            scope.launch { state.scrollToItem(target) }
                         }
 
                         jumpTo(down.position.y)
@@ -245,10 +276,15 @@ private fun SimpleVerticalScrollbar(
     ) {
         val density = LocalDensity.current
         val trackPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
-        val maxValue = state.maxValue.toFloat().coerceAtLeast(1f)
-        val thumbPx = thumbPxFor(trackPx, state.maxValue)
-        val maxOffset = (trackPx - thumbPx).coerceAtLeast(1f)
-        val offsetPx = (state.value / maxValue * maxOffset).coerceIn(0f, maxOffset)
+        val total = state.layoutInfo.totalItemsCount
+        val visible = state.layoutInfo.visibleItemsInfo.size
+        // 滑块高度 = 可见占比；至少留 30px，保证内容少时也能点到
+        val thumbRatio = if (total > 0) (visible.toFloat() / total).coerceIn(0.08f, 1f) else 1f
+        val thumbPx = (trackPx * thumbRatio).coerceIn(30f, trackPx)
+        val progress = if (total > 1) {
+            state.firstVisibleItemIndex.toFloat() / (total - 1)
+        } else 0f
+        val offsetPx = (progress * (trackPx - thumbPx)).coerceIn(0f, (trackPx - thumbPx).coerceAtLeast(0f))
 
         // 极淡的轨道底线，提示这里可以点
         Box(
@@ -271,9 +307,3 @@ private fun SimpleVerticalScrollbar(
 
 /** 滚动条可点击 / 可拖动的触摸区宽度（视觉上滑块仍是 8dp） */
 private val ScrollbarTouchWidth = 16.dp
-
-/** 由轨道高度与可滚动范围算出滑块高度（视觉与手势共用一套公式） */
-private fun thumbPxFor(trackPx: Float, maxValue: Int): Float {
-    val mv = maxValue.toFloat().coerceAtLeast(1f)
-    return (trackPx * trackPx / (trackPx + mv)).coerceIn(30f, trackPx)
-}

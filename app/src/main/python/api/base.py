@@ -808,12 +808,26 @@ class Chaoxing:
 
     @staticmethod
     def _close_pbar_safe(pbar_ref):
+        """关闭进度条，并清掉它在 APP 进度面板里的记录。
+
+        tqdm 的帧本身不写日志（由 android_bootstrap.LogWriter 摘走），
+        这里额外清一次结构化进度，避免已完成的任务残留在进度面板上。
+        """
         if pbar_ref is not None:
+            desc = getattr(pbar_ref, "desc", None)
             try:
                 pbar_ref.leave = False
                 pbar_ref.close()
             except Exception as e:
                 logger.trace(f"关闭进度条失败: {e}")
+            if desc:
+                try:
+                    import android_bootstrap
+                    writer = android_bootstrap.STATE.get("writer")
+                    if writer is not None:
+                        writer.clear_progress(desc)
+                except Exception as e:
+                    logger.trace(f"清理进度记录失败: {e}")
         return None
 
     def study_video(self, _course, _job, _job_info, _speed: float = 1.0,

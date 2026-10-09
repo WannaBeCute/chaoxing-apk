@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -369,6 +370,98 @@ fun DropdownItem(
             }
         }
         if (desc != null) Text(desc, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * 时间选择器（时 + 分，以 5 分钟为步进）。
+ *
+ * 定时启动的开始 / 结束时间都要用到，两个独立的 StepperItem 会把设置页撑得很长，
+ * 这里合成一行：左侧标签，中间显示 HH:MM，右侧分别是小时 / 分钟的加减。
+ *
+ * @param minuteOfDay 自 00:00 起的分钟数；1440 表示 24:00（仅结束时间用得到）
+ * @param allow24 是否允许选到 24:00（=次日 00:00）
+ */
+@Composable
+fun TimeStepperItem(
+    label: String,
+    minuteOfDay: Int,
+    onValueChange: (Int) -> Unit,
+    allow24: Boolean = false,
+    desc: String? = null,
+) {
+    val hour = if (minuteOfDay >= 1440) 24 else minuteOfDay / 60
+    val minute = if (minuteOfDay >= 1440) 0 else minuteOfDay % 60
+    val hourRange = if (allow24) 0..24 else 0..23
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "%02d:%02d".format(hour, minute),
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MiniStepper(
+                text = "时",
+                value = hour,
+                range = hourRange,
+                onValueChange = { h ->
+                    val base = if (minuteOfDay >= 1440) 1440 else minuteOfDay / 60 * 60
+                    onValueChange((base + minuteOfDay % 60).let { h * 60 + it % 60 }.coerceIn(0, 1440))
+                },
+                modifier = Modifier.weight(1f),
+            )
+            MiniStepper(
+                text = "分",
+                value = minute / 5,
+                range = 0..11,
+                onValueChange = { step ->
+                    val base = if (minuteOfDay >= 1440) 1440 else minuteOfDay / 60 * 60
+                    onValueChange((base + step * 5).coerceIn(0, 1440))
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (desc != null) Text(desc, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** TimeStepperItem 内部用的迷你加减器 */
+@Composable
+private fun MiniStepper(
+    text: String,
+    value: Int,
+    range: IntRange,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(shape = CardShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = { if (value > range.first) onValueChange(value - 1) }) {
+                Icon(Icons.Filled.Remove, contentDescription = "减少", modifier = Modifier.size(16.dp))
+            }
+            Text(
+                value.toString(),
+                modifier = Modifier.width(24.dp),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            IconButton(onClick = { if (value < range.last) onValueChange(value + 1) }) {
+                Icon(Icons.Filled.Add, contentDescription = "增加", modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 

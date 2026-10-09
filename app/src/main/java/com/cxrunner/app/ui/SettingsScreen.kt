@@ -61,6 +61,7 @@ import com.cxrunner.app.ui.components.StepperItem
 import com.cxrunner.app.ui.components.SwitchItem
 import com.cxrunner.app.ui.components.TextEditorDialog
 import com.cxrunner.app.ui.components.TextFieldItem
+import com.cxrunner.app.ui.components.TimeStepperItem
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -75,6 +76,7 @@ fun SettingsScreen(
     onFactoryReset: () -> Unit = {},
 ) {
     val config = settings.config
+    val schedule = settings.schedule
 
     fun update(mutator: AppConfig.() -> Unit) {
         val next = config.copy().apply(mutator)
@@ -174,6 +176,53 @@ fun SettingsScreen(
                     },
                     desc = "直接运行则每次运行都要填写账号和密码；按配置文件运行则直接按照当前设置里的配置参数运行",
                 )
+            }
+
+            // ---------------- 定时启动 ----------------
+            // 只对「按配置文件运行」有意义：直接运行每次都要现填账号密码，
+            // 定时触发时没人输入，脚本会一直卡在输入框上。
+            if (settings.runMode == RunMode.CONFIG) {
+                SectionCard(
+                    title = "定时启动",
+                    subtitle = "到点自动开始刷课（仅「按配置文件运行」模式下有效）",
+                ) {
+                    SwitchItem(
+                        label = "启用定时启动",
+                        desc = if (schedule.enabled) {
+                            "每天 ${schedule.startText} — ${schedule.endText} 自动运行"
+                        } else {
+                            "关闭时不会自动运行脚本"
+                        },
+                        checked = schedule.enabled,
+                        onCheckedChange = { enabled ->
+                            onChange(settings.copy(schedule = schedule.copy(enabled = enabled)))
+                            onToast(if (enabled) "已开启定时启动" else "已关闭定时启动")
+                        },
+                    )
+                    if (schedule.enabled) {
+                        TimeStepperItem(
+                            label = "开始时间",
+                            minuteOfDay = schedule.startMinute,
+                            onValueChange = { m ->
+                                onChange(settings.copy(schedule = schedule.copy(startMinute = m.coerceIn(0, 1439))))
+                            },
+                        )
+                        TimeStepperItem(
+                            label = "结束时间",
+                            minuteOfDay = schedule.endMinute,
+                            allow24 = true,
+                            onValueChange = { m ->
+                                onChange(settings.copy(schedule = schedule.copy(endMinute = m.coerceIn(1, 1440))))
+                            },
+                            desc = "选 24:00 表示次日零点",
+                        )
+                        MonoText(
+                            "生效时段：${schedule.startText} — ${schedule.endText}" +
+                                    if (schedule.spansNextDay) "（跨天）" else ""
+                        )
+                        MonoText("提示：定时启动需要「精确闹钟」与「开机自启」权限，可在主页权限卡片里开启。")
+                    }
+                }
             }
 
             // ---------------- 配置文件参数（收纳栏） ----------------

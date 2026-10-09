@@ -29,6 +29,7 @@ object AppFiles {
     val requestFile: File get() = File(uiDir, "request.json")
     val responseFile: File get() = File(uiDir, "response.json")
     val statusFile: File get() = File(uiDir, "status.json")
+    val progressFile: File get() = File(uiDir, "progress.json")
     val stopFile: File get() = File(uiDir, "stop.flag")
     val coursesCacheFile: File get() = File(uiDir, "courses_cache.json")
 
