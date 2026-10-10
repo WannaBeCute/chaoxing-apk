@@ -197,7 +197,14 @@ fun SettingsScreen(
                         },
                         checked = schedule.enabled,
                         onCheckedChange = { enabled ->
-                            onChange(settings.copy(schedule = schedule.copy(enabled = enabled)))
+                            onChange(
+                                settings.copy(
+                                    schedule = schedule.copy(enabled = enabled),
+                                    // 重新开启时清零「空课程列表」提示，让它下次进主页再提醒一次；
+                                    // 关闭时清零则是为了下次开启时状态干净。
+                                    scheduleEmptyNoticeAck = false,
+                                )
+                            )
                             onToast(if (enabled) "已开启定时启动" else "已关闭定时启动")
                         },
                     )

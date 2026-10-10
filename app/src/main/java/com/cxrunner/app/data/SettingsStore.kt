@@ -25,12 +25,13 @@ data class AppSettings(
     var schedule: ScheduleSettings = ScheduleSettings(),
 
     /**
-     * 用户是否已在系统里确认过「自启动」。
+     * 「开了定时启动 + 课程列表为空」的提示是否已经弹过。
      *
-     * AOSP 没有这个开关，MIUI 等厂商的实现又查不到稳定的公开 API，
-     * 所以用户点过卡片之后就用这个标记把卡片转绿，避免明明开了却一直显示「未授权」。
+     * 必须持久化：这个标记如果只放在界面的 remember 里，从设置页返回主页时
+     * 界面重建、标记被重置，弹窗就会反复出现。
+     * 只有用户在设置里**重新打开**定时启动时才会清零，让它再提示一次。
      */
-    var autostartConfirmed: Boolean = false,
+    var scheduleEmptyNoticeAck: Boolean = false,
 )
 
 object SettingsStore {
@@ -49,7 +50,7 @@ object SettingsStore {
             settings.runMode = RunMode.fromName(obj.optString("runMode"))
             settings.fontSize = obj.optInt("fontSize", 12).coerceIn(LOG_FONT_SIZE_MIN, LOG_FONT_SIZE_MAX)
             settings.autoRefresh = obj.optBoolean("autoRefresh", true)
-            settings.autostartConfirmed = obj.optBoolean("autostartConfirmed", false)
+            settings.scheduleEmptyNoticeAck = obj.optBoolean("scheduleEmptyNoticeAck", false)
             val sch = obj.optJSONObject("schedule")
             if (sch != null) {
                 settings.schedule = ScheduleSettings(
@@ -81,7 +82,7 @@ object SettingsStore {
             obj.put("runMode", settings.runMode.name)
             obj.put("fontSize", settings.fontSize)
             obj.put("autoRefresh", settings.autoRefresh)
-            obj.put("autostartConfirmed", settings.autostartConfirmed)
+            obj.put("scheduleEmptyNoticeAck", settings.scheduleEmptyNoticeAck)
             obj.put(
                 "schedule",
                 JSONObject().apply {

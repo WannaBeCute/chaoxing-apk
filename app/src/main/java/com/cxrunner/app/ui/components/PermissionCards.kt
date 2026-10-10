@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,13 +32,35 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/**
+ * 权限卡片的状态。
+ *
+ * 之所以不是简单的 Boolean：像「开机自启」这种开关，AOSP 原生根本没有、
+ * 各厂商 ROM 各用各的私有实现，**大部分设备其实查不出结论**。
+ * 硬塞成 true/false 就会骗人（要么一直显示未授权逼用户自己确认，要么假装已授权）。
+ * 所以单独留一个 UNKNOWN：查不到就如实说「无法检测」，既不误报也不骚扰用户。
+ *
+ * 枚举顺序即排序权重：MISSING 最需要用户处理、排最前，GRANTED 排最后。
+ */
+enum class PermissionCardStatus {
+    /** 未允许，需要用户去处理 */
+    MISSING,
+
+    /** 系统查不出结论（如 AOSP 没有这个开关） */
+    UNKNOWN,
+
+    /** 已允许 */
+    GRANTED,
+}
+
 data class PermissionCardState(
     val id: String,
     val title: String,
     val detail: String,
-    val granted: Boolean,
+    val status: PermissionCardStatus,
     val grantedText: String = "已获取",
     val missingText: String = "去开启",
+    val unknownText: String = "无法检测",
     val icon: ImageVector,
     val onClick: () -> Unit,
 )
@@ -63,17 +86,22 @@ fun PermissionCardRow(cards: List<PermissionCardState>) {
 @Composable
 private fun PermissionCard(state: PermissionCardState) {
     val shape = RoundedCornerShape(10.dp)
-    val container = if (state.granted) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-    } else {
-        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.30f)
+    // 三态三色：已允许=主色，未允许=错误色，查不出来=中性 tertiary（不吓唬用户）
+    val container = when (state.status) {
+        PermissionCardStatus.GRANTED -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        PermissionCardStatus.MISSING -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.30f)
+        PermissionCardStatus.UNKNOWN -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.30f)
     }
-    val border = if (state.granted) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
-    } else {
-        MaterialTheme.colorScheme.error.copy(alpha = 0.55f)
+    val border = when (state.status) {
+        PermissionCardStatus.GRANTED -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+        PermissionCardStatus.MISSING -> MaterialTheme.colorScheme.error.copy(alpha = 0.55f)
+        PermissionCardStatus.UNKNOWN -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.50f)
     }
-    val accent = if (state.granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    val accent = when (state.status) {
+        PermissionCardStatus.GRANTED -> MaterialTheme.colorScheme.primary
+        PermissionCardStatus.MISSING -> MaterialTheme.colorScheme.error
+        PermissionCardStatus.UNKNOWN -> MaterialTheme.colorScheme.tertiary
+    }
     Column(
         modifier = Modifier
             .width(112.dp)
@@ -117,14 +145,22 @@ private fun PermissionCard(state: PermissionCardState) {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                if (state.granted) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                when (state.status) {
+                    PermissionCardStatus.GRANTED -> Icons.Filled.CheckCircle
+                    PermissionCardStatus.MISSING -> Icons.Filled.RadioButtonUnchecked
+                    PermissionCardStatus.UNKNOWN -> Icons.Filled.Help
+                },
                 contentDescription = null,
                 tint = accent,
                 modifier = Modifier.size(12.dp),
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-                if (state.granted) state.grantedText else state.missingText,
+                when (state.status) {
+                    PermissionCardStatus.GRANTED -> state.grantedText
+                    PermissionCardStatus.MISSING -> state.missingText
+                    PermissionCardStatus.UNKNOWN -> state.unknownText
+                },
                 fontSize = 10.sp,
                 color = accent,
             )

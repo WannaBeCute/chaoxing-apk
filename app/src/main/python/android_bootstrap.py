@@ -408,17 +408,83 @@ def _patched_sleep(secs):
         _real_sleep(min(remain, 0.4))
 
 
+def _interrupt_script_thread():
+    """把 KeyboardInterrupt 投递给「正在跑脚本的那个线程」。
+
+    为什么不用 `os.kill(getpid(), SIGINT)`：
+        Python 的信号处理函数只会在**解释器主线程**里执行，而 Chaquopy 调
+        `start()` 的线程未必就是初始化解释器的那个线程，信号可能压根落不到
+        跑脚本的线程上（真机表现就是点了停止、脚本毫无反应）。
+    这里优先用 C 接口 `PyThreadState_SetAsyncExc` 直接给目标线程挂异步异常，
+    不依赖信号；拿不到再退回原来的 SIGINT。
+    """
+    # 脚本已经进入收尾阶段就别再投递了：
+    # 这时候投出去的异常只会打在收尾逻辑上，把「写状态」那一步打断。
+    if not STATE.get("entry_running", False):
+        return False
+    target = STATE.get("script_thread") or threading.main_thread()
+    if target is threading.current_thread():
+        return False
+
+    try:
+        import ctypes
+
+        tid = target.ident
+        if tid:
+            set_async = ctypes.pythonapi.PyThreadState_SetAsyncExc
+            set_async.restype = ctypes.c_int
+            n = set_async(ctypes.c_ulong(tid), ctypes.py_object(KeyboardInterrupt))
+            if n == 1:
+                return True
+            if n > 1:
+                # 一次影响了多个线程状态，立刻撤销，避免误伤
+                set_async(ctypes.c_ulong(tid), None)
+    except Exception:
+        pass
+
+    try:
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
+    except Exception:
+        return False
+
+
+def _clear_pending_async_exc():
+    """清掉挂在**当前线程**上、还没投递的异步异常。
+
+    为什么需要：看门狗投递的是异步异常，CPython 只承诺「下次执行字节码时抛出」，
+    落点不可控。若协作式停止（补丁后的 sleep / queue）先一步让脚本收尾，
+    这个异常就会延迟到 `finally` 里才炸出来——真机表现就是
+    「任务明明停了，APP 却卡在正在停止」（因为写状态那句被跳过）。
+    """
+    try:
+        import ctypes
+
+        tid = threading.current_thread().ident
+        if tid:
+            set_async = ctypes.pythonapi.PyThreadState_SetAsyncExc
+            set_async.restype = ctypes.c_int
+            # 第二个参数传 NULL 即「撤销待投递的异常」
+            set_async(ctypes.c_ulong(tid), None)
+    except Exception:
+        pass
+
+
 def _watchdog():
-    """监听停止标记，向自身发送 SIGINT 以中断主线程。"""
+    """监听停止标记，一旦出现就中断正在跑脚本的线程。
+
+    【关键】这里只能用 `_real_sleep`，不能用 `time.sleep`：
+        `time.sleep` 在 start() 里已被换成 `_patched_sleep`，而 `_patched_sleep`
+        一发现停止标记就抛 KeyboardInterrupt——那样异常会落在**看门狗自己的线程**里，
+        看门狗当场死亡（日志里就是 `Exception in thread Thread-N (_watchdog)`），
+        下面的投递逻辑一行都执行不到，脚本因此永远收不到中断、继续闷头刷课。
+    """
     while True:
         if stop_requested():
             STATE["stopped"] = True
-            try:
-                os.kill(os.getpid(), signal.SIGINT)
-            except Exception:
-                pass
+            _interrupt_script_thread()
             return
-        time.sleep(0.5)
+        _real_sleep(0.5)
 
 
 # --------------------------------------------------------------------------- #
@@ -643,10 +709,125 @@ def _patch_queue_join():
         return False
 
 
+def _patch_queue_get():
+    """让 queue.Queue.get() 在收到停止指令后立刻抛 KeyboardInterrupt。
+
+    为什么需要（真机实测：点了停止，日志又继续刷了 35 秒、700 多个任务点）：
+        `JobProcessor` 的工作线程是 daemon，循环里阻塞在 `task_queue.get()` 上取任务。
+        Chaquopy 的解释器是长期存活的，`start()` 返回并不会带走这些 daemon 线程——
+        主线程虽然已经收尾，它们仍会把队列里剩下的章节一个不落刷完。
+        让 get() 也感知停止标记，工作线程就会在下一轮取任务时立刻退出。
+
+    只替换等待实现，正常运行时语义与原版一致（只是内部改成 0.2s 轮询），
+    **不改上游任何一行代码**。
+    """
+    try:
+        import queue as _queue
+
+        if getattr(_queue.Queue.get, "_cxrunner_stop_aware", False):
+            return False
+        real_get = _queue.Queue.get
+        empty_exc = _queue.Empty
+
+        def get(self, block=True, timeout=None):
+            if stop_requested():
+                raise KeyboardInterrupt("用户已停止运行")
+            if not block:
+                return real_get(self, block=False)
+            if timeout is None:
+                # 无限等待：分段等，每段回来先看一眼停止标记
+                while True:
+                    if stop_requested():
+                        raise KeyboardInterrupt("用户已停止运行")
+                    try:
+                        return real_get(self, True, 0.2)
+                    except empty_exc:
+                        continue
+            # 有限等待：同样分段，但严格遵守调用方给的 deadline
+            deadline = time.time() + timeout
+            while True:
+                if stop_requested():
+                    raise KeyboardInterrupt("用户已停止运行")
+                remain = deadline - time.time()
+                try:
+                    return real_get(self, True, min(max(remain, 0.0), 0.2))
+                except empty_exc:
+                    if time.time() >= deadline:
+                        raise
+
+        get._cxrunner_stop_aware = True
+        _queue.Queue.get = get
+        return True
+    except Exception:
+        return False
+
+
+def _task_threads():
+    """找出上游脚本自己起的那些工作线程（JobProcessor 的 worker / retry）。
+
+    判定方式：线程 target 是**绑定方法**，且其所属类定义在入口脚本里
+    （模块名为 `__main__` 或 `main`）。这样能把 loguru 那类常驻后台线程排除掉，
+    否则下面的等待每次都要白白等满超时。
+    """
+    me = threading.current_thread()
+    found = []
+    for t in threading.enumerate():
+        if t is me or t is threading.main_thread():
+            continue
+        if getattr(t, "_cxrunner_internal", False):
+            continue
+        try:
+            if not t.is_alive():
+                continue
+            owner = getattr(getattr(t, "_target", None), "__self__", None)
+            module = getattr(type(owner), "__module__", "") if owner is not None else ""
+        except Exception:
+            continue
+        if module in ("__main__", "main"):
+            found.append(t)
+    return found
+
+
+def _wait_for_worker_threads(timeout=5.0):
+    """等上游的 daemon 工作线程真正退出，最多等 timeout 秒。
+
+    不等的话，APP 这边已经切回「已停止」，日志却还在刷剩下的章节。
+    等满了也不再拖：宁可让残留线程在下一轮 get() 时自己退出，也不能卡住界面。
+    """
+    deadline = time.time() + timeout
+    while True:
+        others = _task_threads()
+        if not others:
+            return True
+        if time.time() >= deadline:
+            return False
+        for t in others:
+            t.join(timeout=0.2)
+
+
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
 def start(params_json):
+    """APP 调用的入口（RunnerService 里 `callAttr("start", paramsJson)`）。
+
+    外面这层是必须的：**无论里面发生什么，状态都要写成 finished**。
+    停止是用「异步异常」投递的，它只在线程下次执行字节码时抛出，落点并不可控——
+    真机出现过：任务确实停了，但异常在**收尾阶段**才炸出来，
+    `finally` 里写状态的那句被跳过，APP 就一直卡在「正在停止…」。
+    所以这里兜底：内部哪怕漏出异常，也先把状态落盘、再返回一个退出码。
+    """
+    try:
+        return _start_impl(params_json)
+    except BaseException:
+        try:
+            _write_status("finished", 130)
+        except Exception:
+            pass
+        return 130
+
+
+def _start_impl(params_json):
     """
     params_json: {
         "workdir":  可写工作目录（cookies.txt / chaoxing.log / config.ini 都放这里）
@@ -672,6 +853,10 @@ def start(params_json):
     # 停止时不能死等在 queue.join() 上，否则脚本不退出、APP 一直停在「正在停止…」
     join_patched = _patch_queue_join()
 
+    # 停止后要让上游的 daemon 工作线程也能退出：Chaquopy 的解释器不随 start() 返回
+    # 销毁，光让主线程收尾的话，它们仍会把队列里剩下的章节全部刷完
+    get_patched = _patch_queue_get()
+
     STATE.update({
         "workdir": workdir,
         "log_path": log_path,
@@ -681,6 +866,10 @@ def start(params_json):
         "resp_path": os.path.join(ui_dir, "response.json"),
         "req_id": 0,
         "stopped": False,
+        # 真正执行脚本的线程：停止时要把 KeyboardInterrupt 投递给它
+        "script_thread": threading.current_thread(),
+        # 脚本是否还在跑（进入收尾后置 False，看门狗就停止投递）
+        "entry_running": False,
     })
     _remove(STATE["stop_flag"])
     _remove(STATE["req_path"])
@@ -699,7 +888,9 @@ def start(params_json):
 
     builtins.input = _patched_input
     time.sleep = _patched_sleep
-    threading.Thread(target=_watchdog, daemon=True).start()
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog._cxrunner_internal = True  # 收尾等待时要跳过它
+    watchdog.start()
 
     os.chdir(workdir)
     sys.argv = list(argv)
@@ -711,11 +902,13 @@ def start(params_json):
     _log("脚本目录: %s" % HERE)
     _log("multiprocessing 兼容补丁: %s" % ("已应用" if mp_patched else "未应用"))
     _log("停止等待(queue.join) 补丁: %s" % ("已应用" if join_patched else "未应用"))
+    _log("停止取任务(queue.get) 补丁: %s" % ("已应用" if get_patched else "未应用"))
     _log("启动命令: main.py %s" % " ".join(argv[1:]))
     _log("=" * 52)
 
     code = 0
     entry_desc = None
+    STATE["entry_running"] = True
     try:
         entry_desc = _run_entry()
     except SystemExit as e:  # 脚本主动退出（ argparse -h 等）
@@ -730,11 +923,23 @@ def start(params_json):
         except Exception:
             pass
     finally:
+        # 先摘掉「脚本还在跑」这个开关：之后看门狗即便又发现停止标记，
+        # 也不该把异步异常挂到正在收尾的线程上。
+        STATE["entry_running"] = False
+        # 撤销可能已经挂上、但还没来得及投递的异步异常
+        _clear_pending_async_exc()
         STATE["stopped"] = True
-        builtins.input = _real_input
-        time.sleep = _real_sleep
         _remove(STATE["stop_flag"])
         _remove(STATE["req_path"])
+        # 解释器不会因为 start() 返回而销毁，先等上游的 daemon 工作线程收尾，
+        # 否则 APP 这边已经切回「已停止」，日志却还在刷剩下的章节。
+        # 这里自己吃掉异常：收尾环节被打断也不能影响下面写状态。
+        try:
+            _wait_for_worker_threads()
+        except BaseException:
+            pass
+        builtins.input = _real_input
+        time.sleep = _real_sleep
         if entry_desc:
             _log("入口加载方式: %s" % entry_desc)
         _log("=" * 52)

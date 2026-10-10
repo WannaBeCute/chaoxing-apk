@@ -1,6 +1,7 @@
 package com.cxrunner.app.ui
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -79,6 +80,7 @@ import com.cxrunner.app.ui.components.LogConsole
 import com.cxrunner.app.ui.components.NoticeDialog
 import com.cxrunner.app.ui.components.PermissionCardRow
 import com.cxrunner.app.ui.components.PermissionCardState
+import com.cxrunner.app.ui.components.PermissionCardStatus
 import com.cxrunner.app.ui.components.ProgressPanel
 import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
@@ -178,11 +180,12 @@ fun MainScreen(
     // ------------------------------------------------------------------ //
     val scheduleOn = settings.schedule.enabled && settings.runMode == RunMode.CONFIG
     val courseListEmpty = settings.config.courseList.isBlank()
-    var noticeShown by remember { mutableStateOf(false) }
+    // 「是否已经提示过」必须是**持久化**状态：
+    // 放在 remember 里的话，从设置页返回主页时界面重建、标记被清零，弹窗会反复出现。
+    // 现在写进 settings.json，只有在设置里重新打开定时启动时才会清零（见 SettingsScreen）。
     var showEmptyCourseNotice by remember { mutableStateOf(false) }
-    LaunchedEffect(scheduleOn, courseListEmpty) {
-        if (scheduleOn && courseListEmpty && !noticeShown) {
-            noticeShown = true
+    LaunchedEffect(scheduleOn, courseListEmpty, settings.scheduleEmptyNoticeAck) {
+        if (scheduleOn && courseListEmpty && !settings.scheduleEmptyNoticeAck) {
             showEmptyCourseNotice = true
         }
     }
@@ -203,7 +206,6 @@ fun MainScreen(
             onEditCookies = onEditCookies,
             onOpenTikuSettings = onOpenTikuSettings,
             onOpenAutostart = { openAutostartSettings(context) },
-            onConfirmAutostart = { onSettingsChange(settings.copy(autostartConfirmed = true)) },
         )
     }
 
@@ -391,9 +393,13 @@ fun MainScreen(
 
     if (showEmptyCourseNotice) {
         NoticeDialog(
-            message = "当前配置文件里的课程列表为空，如不补充。则自启动时默认刷全部课程",
+            message = "当前配置文件里的课程列表为空。若不补充，则自启动时默认刷全部课程",
             confirmText = "我已了解",
-            onDismiss = { showEmptyCourseNotice = false },
+            onDismiss = {
+                showEmptyCourseNotice = false
+                // 记进设置里，之后进主页都不再弹；重新开启定时启动时会被清零
+                onSettingsChange(settings.copy(scheduleEmptyNoticeAck = true))
+            },
         )
     }
 }
@@ -433,6 +439,10 @@ private fun ModeSegmentedControl(
     }
 }
 
+/** 布尔型检测结果 → 卡片状态（真/假都有明确结论，不会出现「无法检测」）。 */
+private fun Boolean.toCardStatus(): PermissionCardStatus =
+    if (this) PermissionCardStatus.GRANTED else PermissionCardStatus.MISSING
+
 private fun buildPermissionCards(
     context: Context,
     settings: AppSettings,
@@ -440,7 +450,6 @@ private fun buildPermissionCards(
     onEditCookies: () -> Unit,
     onOpenTikuSettings: () -> Unit,
     onOpenAutostart: (() -> Unit)? = null,
-    onConfirmAutostart: (() -> Unit)? = null,
 ): List<PermissionCardState> {
     val cards = mutableListOf<PermissionCardState>()
 
@@ -453,7 +462,7 @@ private fun buildPermissionCards(
         id = "notification",
         title = "通知权限",
         detail = "运行状态的常驻通知",
-        granted = notifGranted,
+        status = notifGranted.toCardStatus(),
         icon = Icons.Filled.Notifications,
         onClick = {
             if (notifGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -473,7 +482,7 @@ private fun buildPermissionCards(
         id = "battery",
         title = "后台常驻",
         detail = "关闭电池优化以免被系统休眠",
-        granted = ignoring,
+        status = ignoring.toCardStatus(),
         grantedText = "已放行",
         missingText = "去设置",
         icon = Icons.Filled.Bolt,
@@ -498,7 +507,7 @@ private fun buildPermissionCards(
         id = "network",
         title = "网络访问",
         detail = if (networkOk) "已连接到网络" else "当前无可用网络",
-        granted = networkOk,
+        status = networkOk.toCardStatus(),
         grantedText = "已连接",
         missingText = "去设置",
         icon = Icons.Filled.Wifi,
@@ -518,7 +527,7 @@ private fun buildPermissionCards(
             id = "cookies",
             title = "Cookies 文件",
             detail = if (has) "cookies.txt 已就绪" else "缺少 cookies.txt",
-            granted = has,
+            status = has.toCardStatus(),
             grantedText = "已就绪",
             missingText = "去编辑",
             icon = Icons.Filled.Lock,
@@ -535,7 +544,7 @@ private fun buildPermissionCards(
             id = "ai",
             title = "大模型配置",
             detail = if (ready) "API 已配置" else "未填写 Key / Endpoint",
-            granted = ready,
+            status = ready.toCardStatus(),
             grantedText = "已配置",
             missingText = "去填写",
             icon = Icons.Filled.Settings,
@@ -551,7 +560,7 @@ private fun buildPermissionCards(
             id = "exact_alarm",
             title = "精确闹钟",
             detail = if (exactOk) "可准时触发定时任务" else "缺少权限，到点可能延迟",
-            granted = exactOk,
+            status = exactOk.toCardStatus(),
             grantedText = "已授权",
             missingText = "去授权",
             icon = Icons.Filled.Alarm,
@@ -572,43 +581,57 @@ private fun buildPermissionCards(
         )
 
         // 开机自启：各厂商 ROM 的入口不统一，能找到的就直接跳过去。
-        // 状态判定：能查（MIUI 等 AppOps）就用查询结果；查不到时看用户是否已点过确认，
-        // 否则这张卡会永远停在红色「未授权」，用户明明开了也没用。
+        // 状态一律由系统实测得出（见 detectAutostart）；查不出结论就如实显示
+        // 「无法检测」，既不误报成未授权，也不要求用户自己确认。
+        val autostartStatus = detectAutostart(context)
         cards += PermissionCardState(
             id = "autostart",
             title = "开机自启",
-            detail = "重启后自动恢复定时任务",
-            granted = detectAutostart(context) ?: settings.autostartConfirmed,
-            grantedText = "请手动确认",
-            missingText = "去设置",
-            icon = Icons.Filled.PowerSettingsNew,
-            onClick = {
-                onOpenAutostart?.invoke()
-                onConfirmAutostart?.invoke()
+            detail = if (autostartStatus == PermissionCardStatus.UNKNOWN) {
+                "该 ROM 查不到开关，可点此前往设置"
+            } else {
+                "重启后自动恢复定时任务"
             },
+            status = autostartStatus,
+            grantedText = "已允许",
+            missingText = "去设置",
+            unknownText = "无法检测",
+            icon = Icons.Filled.PowerSettingsNew,
+            onClick = { onOpenAutostart?.invoke() },
         )
     }
 
-    // 未授权的排在前面，但同一组内保持原来的先后顺序
-    // （sortedBy 是稳定排序：网络访问 与 大模型配置 都没授权时，仍是网络访问在前）。
-    return cards.sortedBy { it.granted }
+    // 需要处理的排前面：未允许 → 无法检测 → 已允许；
+    // 同一组内保持原来的先后顺序（sortedBy 是稳定排序：
+    // 网络访问 与 大模型配置 都没配置好时，仍是网络访问在前）。
+    return cards.sortedBy { it.status.ordinal }
 }
 
 /**
- * 查询「自启动」是否已允许。
+ * 查询「自启动 / 后台自启」的状态，查不出结论就返回 UNKNOWN。
  *
- * AOSP 原生根本没有这个开关，各厂商ROM 各用各的 AppOps 实现；
- * MIUI 的操作码是 `OP_AUTO_START = 10000`（隐藏 API，反射取不到，只能写字面量）。
+ * 现实：AOSP 原生没有「自启动」这个开关，各厂商 ROM 各用各的 AppOps 操作码，
+ * 没有统一的公开 API。所以分三层判定，**全程由系统实测，不猜、也不让用户自己确认**：
  *
- * 这里用**反射按签名找方法**而不是直接调 `AppOpsManager.checkOpNoThrow(int, int, String)`：
- * 不同 SDK 版本上那个名字存在多个重载（`(String, Int, String)` 等），
- * 直接调会解析到错误的重载而编译失败。
+ *  1. 先用反射试厂商那套自启动 AppOps（MIUI 常用 `OP_AUTO_START = 10000`），
+ *     拿到 ALLOWED / IGNORED / ERRORED 就是明确结论。
+ *  2. 查不到，但系统明确限制了本应用后台运行
+ *     （`ActivityManager.isBackgroundRestricted`）→ 那自启动一定不生效，判 MISSING。
+ *  3. 除此之外真的判断不了（AOSP 没这个开关、该 ROM 也没实现对应 op）→ 如实返回
+ *     UNKNOWN，界面显示「无法检测」，既不误报成未授权，也不骚扰用户。
  *
- * 返回 `true/false` 表示查到了明确结论；返回 `null` 表示**查不出来**
- * （非 MIUI、或该 ROM 没实现这个 op），此时应由调用方退回"用户手动确认过"这个状态，
- * 否则这张卡片会永远停在红色的「未授权」，用户明明开了也没用。
+ * 用反射而不是直接调 `AppOpsManager.checkOpNoThrow(int, int, String)` 的原因：
+ * 不同 SDK 上那个名字存在多个重载（`(String, Int, String)` 等），
+ * 直接调会解析到错误的重载而编译失败，所以按参数签名筛选。
  */
-private fun detectAutostart(context: Context): Boolean? {
+private fun detectAutostart(context: Context): PermissionCardStatus {
+    queryAutostartAppOps(context)?.toCardStatus()?.let { return it }
+    if (isBackgroundRestricted(context)) return PermissionCardStatus.MISSING
+    return PermissionCardStatus.UNKNOWN
+}
+
+/** 厂商自启动 AppOps；该 ROM 没实现这个 op（或查不到）时返回 null。 */
+private fun queryAutostartAppOps(context: Context): Boolean? {
     return try {
         val ops = context.getSystemService(Context.APP_OPS_SERVICE) ?: return null
         val method = ops.javaClass.methods.firstOrNull {
@@ -623,10 +646,21 @@ private fun detectAutostart(context: Context): Boolean? {
         when (mode) {
             OP_MODE_ALLOWED -> true
             OP_MODE_IGNORED, OP_MODE_ERRORED -> false
-            else -> null // MODE_DEFAULT 等：系统没说，不表态
+            else -> null // MODE_DEFAULT 等：系统没表态，交给下面的通用判定
         }
     } catch (e: Throwable) {
         null
+    }
+}
+
+/** 系统是否限制了本应用的后台运行（Android 9+；被限制时定时任务不会被拉起）。 */
+private fun isBackgroundRestricted(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+    return try {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        am?.isBackgroundRestricted == true
+    } catch (e: Throwable) {
+        false
     }
 }
 
