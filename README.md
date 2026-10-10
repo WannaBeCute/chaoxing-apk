@@ -5,8 +5,6 @@
 
 > 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
 >
-> 本仓库为 APK 打包源码：<https://github.com/WannaBeCute/chaoxing-apk>
->
 > 本项目由AI辅助生成
 
 ## 应用截图
