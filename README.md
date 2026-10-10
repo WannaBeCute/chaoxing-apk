@@ -19,6 +19,9 @@
 
 ---
 
+> 注：下面内容主要是给开发此项目的智能体看的。要安装程序请跳转到[Release](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.1)
+
+
 ## 一、整体方案
 
 | 层 | 技术 |
