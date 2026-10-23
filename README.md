@@ -26,7 +26,7 @@
      <img src="https://github.com/user-attachments/assets/0a5a9ec1-c6aa-4cb1-a0fb-f8269785d8d1" width="450" />
    </p>
 
-2. **选择运行模式**：如果只是临时使用一下，选择「直接运行」模式再点击运行，接着按系统提示完成操作即可。
+2. **选择运行模式并运行**：如果只是临时使用一下，选择「直接运行」模式再点击运行，接着按系统提示完成操作即可。
 
    **【推荐】** 使用该程序最好选择「按配置文件运行」模式，以应对长期使用和多功能的需求（比如刷题，通知）。最好先打开设置，填写账号和密码，再选择「按配置文件运行」模式运行，之后就不用再填账号和密码
 
@@ -36,13 +36,19 @@
    <p align="center">
      <img src="https://github.com/user-attachments/assets/d15f5ee7-264a-4c55-8bb4-14bfc3bb6662" width="450" />
    </p>
+
+> 登录成功后，会显示课程列表，可以手动选择要刷的课程
+  <p align="center">
+    <img src="https://github.com/user-attachments/assets/dcf92565-cff2-4f80-af66-87a0b569f997" width="450" />
+  </p>
+
    
 3. **进程判断**：「开始运行」后，日志区上方会显示进度条。如果开启了刷题，日志区内也可以查看。若运行后出现异常停止任务的情况(退出码不为0)，可以滑动日志至底部查看原因
   <p align="center">
     <img src="https://github.com/user-attachments/assets/50e38f7d-8952-49f4-a206-b9cacb53df73" width="450" />
   </p>
 
-  退出码为0时代表程序正常退出(比如刷课任务完成,用户手动停止等)
+> 退出码为0时代表程序正常退出(比如刷课任务完成,用户手动停止等)
   <p align="center">
     <img src="https://github.com/user-attachments/assets/85f5e0aa-d76b-4cdc-8c42-671d7d151a1a" width="450" />
   </p>
@@ -55,10 +61,6 @@
     <img src="https://github.com/user-attachments/assets/07e2539a-38f1-4d39-9029-60a800044425" width="450" />
   </p>
 
-> 登录成功后，会显示课程列表，可以手动选择要刷的课程
-  <p align="center">
-    <img src="https://github.com/user-attachments/assets/dcf92565-cff2-4f80-af66-87a0b569f997" width="450" />
-  </p>
 
 
 ---
