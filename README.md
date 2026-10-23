@@ -1,8 +1,14 @@
+<div align="center">
+  
 # 超星刷课助手
 
 **这是一个无需root，无需命令行操作，完全免费，在安卓手机上就能使用的超星刷课工具**
 
-此项目的脚本源码来自开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
+</div>
+
+## 简单说明
+
+此项目的脚本源码全部来自开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
 我将脚本打包成了一个可以在 Android 上**长期后台运行**的 APP，使得脚本可以一直在手机上全天24小时运行，避免了操作电脑或服务器的麻烦，非开发者也可以快速上手使用
 
 > 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
@@ -23,7 +29,7 @@
 1. **开启必要权限**：主页顶部有一排权限卡片，运行该程序需要这些权限，可以逐个都点一下
 
    <p align="center">
-     <img src="https://github.com/user-attachments/assets/0a5a9ec1-c6aa-4cb1-a0fb-f8269785d8d1" width="450" />
+     <img src="app/src/main/assets/help/biyaoquanxian.jpeg" width="450" />
    </p>
 
 2. **选择运行模式并运行**：如果只是临时使用一下，选择「直接运行」模式再点击运行，接着按系统提示完成操作即可。
@@ -31,34 +37,34 @@
    **【推荐】** 使用该程序最好选择「按配置文件运行」模式，以应对长期使用和多功能的需求（比如刷题，通知）。最好先打开设置，填写账号和密码，再选择「按配置文件运行」模式运行，之后就不用再填账号和密码
 
    <p align="center">
-     <img src="https://github.com/user-attachments/assets/f6444372-3ea8-4c14-9918-9dafa47b8755" width="450" />
+     <img src="app/src/main/assets/help/home.jpeg" width="450" />
    </p>
    <p align="center">
-     <img src="https://github.com/user-attachments/assets/d15f5ee7-264a-4c55-8bb4-14bfc3bb6662" width="450" />
+     <img src="app/src/main/assets/help/input.jpeg" width="450" />
    </p>
 
 > 登录成功后，会显示课程列表，可以手动选择要刷的课程
   <p align="center">
-    <img src="https://github.com/user-attachments/assets/dcf92565-cff2-4f80-af66-87a0b569f997" width="450" />
+    <img src="app/src/main/assets/help/course_list.jpeg" width="450" />
   </p>
 
    
 3. **进程判断**：「开始运行」后，日志区上方会显示进度条。如果开启了刷题，日志区内也可以查看。若运行后出现异常停止任务的情况(退出码不为0)，可以滑动日志至底部查看原因
   <p align="center">
-    <img src="https://github.com/user-attachments/assets/50e38f7d-8952-49f4-a206-b9cacb53df73" width="450" />
+    <img src="app/src/main/assets/help/process.jpeg" width="450" />
   </p>
 
 > 退出码为0时代表程序正常退出(比如刷课任务完成,用户手动停止等)
   <p align="center">
-    <img src="https://github.com/user-attachments/assets/85f5e0aa-d76b-4cdc-8c42-671d7d151a1a" width="450" />
+    <img src="app/src/main/assets/help/normal_run.jpeg" width="450" />
   </p>
 
 4. **AI答题**：如果想自动刷题，必须要调用AI大模型的api。右上角「设置」→「配置文件参数」→「题库区」，选择"AI"，补充三个字段值即可（需要在api开放平台获取）。答题行为需要在「行为区」里设置。
   <p align="center">
-    <img src="https://github.com/user-attachments/assets/e988458d-e2f9-4725-9677-0d31108fcca5" width="450" />
+    <img src="app/src/main/assets/help/ai_dingdian.jpeg" width="450" />
   </p>
   <p align="center">
-    <img src="https://github.com/user-attachments/assets/07e2539a-38f1-4d39-9029-60a800044425" width="450" />
+    <img src="app/src/main/assets/help/behavior.jpeg" width="450" />
   </p>
 
 
