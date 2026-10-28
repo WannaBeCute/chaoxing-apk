@@ -1,4 +1,4 @@
-> 已在v1.2修复切后台异常停止任务的问题（#1，#2）
+> 已在[v1.2](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2)修复切后台异常停止任务的问题（#1，#2）
 
 <div align="center">
 
@@ -26,7 +26,6 @@
 
 
 ## 快速上手（来自[帮助文档](app/src/main/assets/help/quickstart.md)）
-> 目前发布的安装包还没加载最新的帮助文档，将在下个版本(v1.2)载入
 
 1. **开启必要权限**：主页顶部有一排权限卡片，运行该程序需要这些权限，可以逐个都点一下
 
@@ -72,6 +71,9 @@
 
 
 ---
+
+> 注：下面的内容主要是给开发此项目的智能体看的。要安装程序请跳转到[Release](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2)
+
 
 ## 一、整体方案
 
