@@ -13,14 +13,19 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalUriHandler
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.AppSettings
 import com.cxrunner.app.data.SettingsStore
+import com.cxrunner.app.data.UpdateCheckResult
+import com.cxrunner.app.data.UpdateManager
 import com.cxrunner.app.service.ScheduleScheduler
 import com.cxrunner.app.ui.HelpScreen
 import com.cxrunner.app.ui.MainScreen
 import com.cxrunner.app.ui.SettingsScreen
 import com.cxrunner.app.ui.components.TextEditorDialog
+import com.cxrunner.app.ui.components.UpdateAvailableDialog
+import com.cxrunner.app.ui.components.UpdateSourceDialog
 import com.cxrunner.app.ui.theme.AppTheme
 
 class MainActivity : ComponentActivity() {
@@ -39,6 +44,7 @@ class MainActivity : ComponentActivity() {
             var showCookies by remember { mutableStateOf(false) }
             var cookiesText by remember { mutableStateOf("") }
             val tick by resumeTick
+            val uriHandler = LocalUriHandler.current
 
             fun toast(message: String) {
                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
@@ -50,6 +56,24 @@ class MainActivity : ComponentActivity() {
                 openTikuSection = false
                 // 恢复出厂会关掉定时启动，这里同步把已登记的闹钟撤掉
                 ScheduleScheduler.sync(this@MainActivity)
+            }
+
+            // ---------------- 自动检查更新 ----------------
+            // 每 24 小时最多一次；只在冷启动做，不打断正在跑的脚本
+            // （这里只发网络请求 + 弹对话框，不动 RunnerController 的任何状态）。
+            var pendingUpdate by remember { mutableStateOf<UpdateCheckResult.Available?>(null) }
+            var updateUiState by remember { mutableStateOf(0) } // 0=未处理 1=显示弹窗 2=选源
+            LaunchedEffect(Unit) {
+                if (UpdateManager.isMuted()) return@LaunchedEffect
+                if (!UpdateManager.shouldAutoCheck()) return@LaunchedEffect
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    UpdateManager.checkIfDue(UpdateManager.currentVersionLabel)
+                }
+                if (result is UpdateCheckResult.Available &&
+                    !UpdateManager.alreadyNotified(result.latest)
+                ) {
+                    pendingUpdate = result
+                }
             }
 
             // 定时启动的闹钟依赖设置项：开关、时间窗、运行模式任一变化都要重排。
@@ -128,6 +152,51 @@ class MainActivity : ComponentActivity() {
                             showCookies = false
                         },
                     )
+                }
+
+                // ---------------- 启动时的更新提醒 ----------------
+                // 注意：这个弹窗只是浮在界面上，不会暂停/停止脚本；
+                // 如果用户正在刷课，关闭弹窗后任务照常继续。
+                val upd = pendingUpdate
+                if (upd != null) {
+                    if (updateUiState != 1) {
+                        UpdateAvailableDialog(
+                            currentVersion = upd.current,
+                            latestVersion = upd.latest,
+                            notes = upd.notes,
+                            canMute = true,
+                            onOpenSourcePicker = { updateUiState = 1 },
+                            onMuteAndClose = {
+                                UpdateManager.setMuted(true)
+                                UpdateManager.markNotified(upd.latest)
+                                pendingUpdate = null
+                                toast("已关闭更新提醒，可在设置里重新打开")
+                            },
+                            onClose = {
+                                // 只是关掉：明天还会再提醒
+                                UpdateManager.markNotified(upd.latest)
+                                pendingUpdate = null
+                                updateUiState = 0
+                            },
+                        )
+                    } else {
+                        UpdateSourceDialog(
+                            githubUrl = upd.githubUrl,
+                            lanzou = upd.lanzou,
+                            onOpen = { source ->
+                                runCatching { uriHandler.openUri(source.url) }
+                                    .onFailure { toast("无法打开浏览器：${it.message}") }
+                                UpdateManager.markNotified(upd.latest)
+                                pendingUpdate = null
+                                updateUiState = 0
+                            },
+                            onDismiss = {
+                                UpdateManager.markNotified(upd.latest)
+                                pendingUpdate = null
+                                updateUiState = 0
+                            },
+                        )
+                    }
                 }
             }
         }

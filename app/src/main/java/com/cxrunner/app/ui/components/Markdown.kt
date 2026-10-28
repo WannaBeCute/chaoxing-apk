@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -175,23 +176,50 @@ fun MarkdownView(
 @Composable
 private fun MarkdownImage(alt: String, src: String, dimColor: Color, ruleColor: Color) {
     val context = LocalContext.current
+    // 文档写在 assets/help/ 下，图片引用通常是相对路径（如 `home.jpeg`），
+    // 这里按「原样 → assets 根 → assets/help」的顺序依次尝试，
+    // 避免文档里写 `![](home.jpeg)` 时一张图都加载不出来。
     val bitmap = remember(src) {
-        runCatching {
-            val path = src.trim().removePrefix("/")
-            context.assets.open(path).use { stream ->
-                BitmapFactory.decodeStream(stream)?.asImageBitmap()
-            }
-        }.getOrNull()
+        val raw = src.trim().removePrefix("/")
+        val candidates = listOf(raw, "help/$raw")
+        candidates.firstNotNullOfOrNull { path ->
+            runCatching {
+                context.assets.open(path).use { stream ->
+                    BitmapFactory.decodeStream(stream)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
     }
     if (bitmap != null) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = alt,
-            contentScale = ContentScale.FillWidth,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp)),
-        )
+        // 图片要随屏幕宽度自适应，但竖长截图（如 1280×2772 的整屏日志截图）
+        // 单纯 fillMaxWidth 会撑出屏宽 2 倍多的高度，把正文挤没。
+        // 做法：按「可用宽度」算等比尺寸，再用 sizeIn 把上限卡住；
+        // BoxWithConstraints 能拿到真实可用宽度（已扣掉页面左右内边距），
+        // 不依赖固定 dp，横竖屏、平板都不会算错。
+        val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
+        val safeRatio = if (ratio.isFinite() && ratio > 0f) ratio else 1f
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val availableWidth = maxWidth
+            val scaledHeight = availableWidth / safeRatio
+            // 高度超过上限就按上限反算宽度，图片整体缩小并居中
+            val finalHeight = minOf(scaledHeight, 420.dp)
+            val finalWidth = finalHeight * safeRatio
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = alt,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .width(finalWidth)
+                        .height(finalHeight)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(ruleColor.copy(alpha = 0.10f)),
+                )
+            }
+        }
     } else {
         Box(
             modifier = Modifier

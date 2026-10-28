@@ -39,6 +39,7 @@ def get_timestamp():
 class SessionManager:
     _instance = None
     _login_lock = threading.Lock()
+    _init_lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -46,15 +47,23 @@ class SessionManager:
         return cls._instance
 
     def __init__(self):
-        self._session = requests.Session()
-        self._session.mount("https://", HTTPAdapter(max_retries=10))
-        self._session.mount("http://", HTTPAdapter(max_retries=10))
-        self._session.request = functools.partial(self._session.request, timeout=5)
-        # For debug purposes
-        # self._session.verify=False
-        self._session.headers.clear()
-        self._session.headers.update(gc.HEADERS)
-        self._session.cookies.update(use_cookies())
+        # Python 每次调用 cls() 都会执行 __init__，即使 __new__ 返回的是单例。
+        # 上游在这里无条件重建 Session，导致多线程刷课时共享登录态被反复重置。
+        if getattr(self, "_initialized", False):
+            return
+        with self._init_lock:
+            if getattr(self, "_initialized", False):
+                return
+            self._session = requests.Session()
+            self._session.mount("https://", HTTPAdapter(max_retries=10))
+            self._session.mount("http://", HTTPAdapter(max_retries=10))
+            self._session.request = functools.partial(self._session.request, timeout=5)
+            # For debug purposes
+            # self._session.verify=False
+            self._session.headers.clear()
+            self._session.headers.update(gc.HEADERS)
+            self._session.cookies.update(use_cookies())
+            self._initialized = True
 
     @classmethod
     def get_instance(cls) -> Self:
@@ -100,20 +109,35 @@ class Account:
 
 
 class RateLimiter:
+    """简单的全局限速器。
+
+    注意：这里**不能**在持锁时把 `last_call` 推到未来再让线程睡在自己的临界区外，
+    否则多个 worker 并发时等待会像「接力棒」一样层层累加——第 4 个线程实际要等到
+    第 1 个 + 3 个间隔，后台跑久了就是「进度长时间不动」。
+    正确做法：算出「本次允许发起的最早时刻」后就把时间槽占掉，锁立刻释放，
+    各线程按自己拿到的时刻等待，互相不叠加。
+    """
+
     def __init__(self, call_interval):
         self.last_call = time.time()
         self.lock = threading.Lock()
         self.call_interval = call_interval
+        # 首个请求不需要等一个间隔，否则每次限速器新建都会白等
+        self._first = True
 
     def limit_rate(self, random_time=False, random_min=0.0, random_max=1.0):
         with self.lock:
+            extra = random.uniform(random_min, random_max) if random_time else 0.0
             now = time.time()
-            base_wait = max(self.last_call + self.call_interval - now, 0)
-            extra_wait = random.uniform(random_min, random_max) if random_time else 0
-            call_wait = base_wait + extra_wait
-            self.last_call = now + call_wait
-
-        time.sleep(call_wait)
+            if self._first:
+                self._first = False
+                slot = now + extra
+            else:
+                slot = max(self.last_call + self.call_interval, now) + extra
+            self.last_call = slot
+        wait = slot - time.time()
+        if wait > 0:
+            time.sleep(wait)
 
 
 class StudyResult(Enum):
@@ -447,12 +471,30 @@ class Chaoxing:
         return _session.cookies.get("fid", 1024)
 
     def get_uid(self):
+        """读取用户 ID；Cookie 被服务端刷新/清空时尝试恢复，而不是直接崩线程。"""
         s = SessionManager.get_session()
-        if "_uid" in s.cookies:
-            return s.cookies["_uid"]
-        if "UID" in s.cookies:
-            return s.cookies["UID"]
-        raise ValueError("Cannot get uid !")
+        uid = s.cookies.get("_uid") or s.cookies.get("UID") or getattr(self, "_cached_uid", None)
+
+        if not uid:
+            # 运行中的 Session 可能被响应里的 Set-Cookie 清掉，磁盘仍保留登录时的 Cookie。
+            disk_cookies = use_cookies()
+            uid = disk_cookies.get("_uid") or disk_cookies.get("UID")
+            if uid:
+                s.cookies.update(disk_cookies)
+
+        if not uid and self.account and self.account.username and self.account.password:
+            logger.warning("登录 Cookie 中缺少 UID，尝试重新登录恢复会话...")
+            if SessionManager.relogin_if_needed(self):
+                s = SessionManager.get_session()
+                uid = s.cookies.get("_uid") or s.cookies.get("UID")
+
+        if uid:
+            uid = str(uid)
+            self._cached_uid = uid
+            if not s.cookies.get("_uid") and not s.cookies.get("UID"):
+                s.cookies.set("_uid", uid)
+            return uid
+        raise ValueError("Cannot get uid: 登录态已失效，请重新登录")
 
     def get_course_list(self):
         _session = SessionManager.get_session()
@@ -821,26 +863,101 @@ class Chaoxing:
             except Exception as e:
                 logger.trace(f"关闭进度条失败: {e}")
             if desc:
-                try:
-                    import android_bootstrap
-                    writer = android_bootstrap.STATE.get("writer")
-                    if writer is not None:
-                        writer.clear_progress(desc)
-                except Exception as e:
-                    logger.trace(f"清理进度记录失败: {e}")
+                Chaoxing._close_pbar_by_name(desc)
         return None
 
+    @staticmethod
+    def _close_pbar_by_name(name):
+        """按任务名清掉 APP 进度面板里的残留条目（正常由 _close_pbar_safe 负责）。"""
+        if not name:
+            return
+        try:
+            import android_bootstrap
+            writer = android_bootstrap.STATE.get("writer")
+            if writer is not None:
+                writer.clear_progress(name)
+        except Exception as e:
+            logger.trace(f"清理进度记录失败: {e}")
+
+    def _video_progress_log_with_retry(self, *args, **kwargs) -> Optional[tuple[bool, int]]:
+        """网络抖动/服务器拒绝连接时有限重试，避免 worker 线程直接退出。
+
+        后台长时间运行时（系统冻结进程、切网、休眠唤醒）首个请求经常要等好几秒才恢复，
+        所以重试间隔与次数都比前台场景宽一些；单次失败不会立刻放弃整个任务点。
+        """
+        max_retries = 4
+        for attempt in range(max_retries + 1):
+            try:
+                return self.video_progress_log(*args, **kwargs)
+            except RequestException as exc:
+                if attempt >= max_retries:
+                    logger.error("视频进度上报连续网络失败，跳过当前任务: {}", exc)
+                    return None
+                delay = min(3 * (attempt + 1), 15)
+                logger.warning(
+                    "视频进度上报网络异常，{} 秒后重试 ({}/{})，后台运行时可能是系统限制了联网",
+                    delay, attempt + 1, max_retries,
+                )
+                time.sleep(delay)
+        return None
+
+    def _fetch_video_info_with_retry(self, _session, _job, _info_url, headers) -> Optional[dict]:
+        """拉取视频元信息（dtoken/duration）。
+
+        这里是每个任务点的第一个请求，后台被冻结后回到前台时最容易在这里抛异常，
+        以前直接把 worker 线程打死；现在退避重试，彻底失败才返回 None。
+        """
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                resp = _session.get(_info_url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("status") == "success":
+                        return data
+                    logger.error(f"Unknown status: {data.get('status')}")
+                    return None
+                logger.warning("获取视频信息返回 {}，第 {}/{} 次", resp.status_code, attempt + 1, max_retries + 1)
+            except (RequestException, ValueError) as exc:
+                logger.warning("获取视频信息异常: {}（第 {}/{} 次）", exc, attempt + 1, max_retries + 1)
+                if attempt >= max_retries:
+                    return None
+                time.sleep(min(2 * (attempt + 1), 10))
+        return None
+
+    @staticmethod
+    def _is_video_finished(_video_info: dict) -> bool:
+        """服务端是否已经把这个任务点记为「播完」（isPassed，或进度已到时长）。
+
+        用来挡住「刚提交成功又被重跑一遍」：章节卡片里的 isPassed 是列表页缓存，
+        有时会比视频状态接口晚一拍，于是同一条视频会被重新拉起来放一遍，
+        APP 的进度面板上就会看到一条 100% 的视频原地复活。
+        """
+        if _video_info.get("isPassed"):
+            return True
+        try:
+            duration = int(_video_info.get("duration") or 0)
+            played = int(_video_info.get("playTime") or 0) // 1000
+        except (TypeError, ValueError):
+            return False
+        return duration > 0 and played >= duration
+
     def study_video(self, _course, _job, _job_info, _speed: float = 1.0,
-                    _type: Literal["Video", "Audio"] = "Video") -> StudyResult:
+                    _type: Literal["Video", "Audio"] = "Video",
+                    _reuse_name: bool = False) -> StudyResult:
+        """完成一个视频（或音频）任务点。
+
+        `_reuse_name=True` 表示这是对同一个任务点的重跑（失败后回退音频等）：
+        进度条沿用原任务名，不要因为一个任务点失败就换名字再来一条。
+        """
         _session = SessionManager.get_session()
 
         headers = gc.VIDEO_HEADERS if _type == "Video" else gc.AUDIO_HEADERS
         _info_url = f"https://mooc1.chaoxing.com/ananas/status/{_job['objectid']}?k={self.get_fid()}&flag=normal"
-        _video_info = _session.get(_info_url, headers=headers).json()
-
-        if _video_info["status"] != "success":
-            logger.error(f"Unknown status: {_video_info['status']}")
-            return StudyResult.ERROR
+        _video_info = self._fetch_video_info_with_retry(_session, _job, _info_url, headers)
+        if _video_info is None:
+            logger.error("无法获取视频信息，稍后重试该任务点: {}", _job.get("name"))
+            return StudyResult.TIMEOUT
 
         _dtoken = _video_info["dtoken"]
 
@@ -856,25 +973,55 @@ class Chaoxing:
         last_iter = time.time()
         wait_time = int(random.uniform(30, 90))
 
+        # 服务端已经记完这个任务点：直接收尾，别再放一遍。
+        # 章节卡片里的 isPassed 来自列表页缓存，可能滞后于视频状态接口，
+        # 少了这一层判断就会看到「已经 100% 的视频又出现在进度列表里」。
+        if self._is_video_finished(_video_info):
+            logger.info("任务点服务端已记录完成，跳过: {}", _job.get("name"))
+            # 顺带清掉可能残留的进度条（服务端提交成功但 APP 上还挂着旧条目）
+            self._close_pbar_by_name(_job.get("name"))
+            return StudyResult.SUCCESS
+
         logger.info(f"开始任务: {_job['name']}, 总时长: {duration}s, 已进行: {play_time}s")
 
         forbidden_retry = 0
         max_forbidden_retry = 2
+        # 收到 100% 却没被判定通过时，最多再补交几次（每次间隔递增），
+        # 不能让 tqdm 已经显示 100% 的进度在「提交中」无限循环。
+        finish_submit_retry = 0
+        max_finish_submit_retry = 6
 
-        passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration, duration,
-                                                _type, headers=headers, _isdrag=4)
+        progress = self._video_progress_log_with_retry(
+            _session, _course, _job, _job_info, _dtoken, duration, duration,
+            _type, headers=headers, _isdrag=4,
+        )
+        if progress is None:
+            return StudyResult.TIMEOUT
+        passed, state = progress
         if passed:
             logger.info("任务瞬间完成: {}", _job['name'])
             return StudyResult.SUCCESS
 
+        pbar_name = _job["name"]
+        if _reuse_name and _type == "Audio":
+            # 视频失败后回退音频：还是同一个任务点，别在面板上多出一条同名的
+            # 100% 视频 + 一条重新从 0% 开始的音频，看起来就像视频复活了
+            pbar_name = f"{_job['name']} (音频)"
+
         pbar = None
+        finished_hint_shown = False
         try:
             while not passed:
                 # Sometimes the last request needs to be sent several times to complete the task
                 if play_time - last_log_time >= wait_time or play_time == duration:
 
-                    passed, state = self.video_progress_log(_session, _course, _job, _job_info, _dtoken, duration,
-                                                            int(play_time), _type, headers=headers)
+                    progress = self._video_progress_log_with_retry(
+                        _session, _course, _job, _job_info, _dtoken, duration,
+                        int(play_time), _type, headers=headers,
+                    )
+                    if progress is None:
+                        return StudyResult.TIMEOUT
+                    passed, state = progress
 
                     if state == 403:
                         if forbidden_retry >= max_forbidden_retry:
@@ -905,8 +1052,40 @@ class Chaoxing:
                     elif not passed and state != 200:
                         return StudyResult.ERROR
 
-                    wait_time = int(random.uniform(30, 90))
-                    last_log_time = play_time
+                    # 进度已到 100% 但服务端仍未判通过：这是「提交阶段」的补交。
+                    # 先查一次服务端状态——很多时候上报其实已生效，只是这次响应里
+                    # isPassed 还没刷新；查到已完成就直接收尾，没必要反复空发请求。
+                    if not passed and play_time >= duration:
+                        finish_submit_retry += 1
+                        refreshed = self._refresh_video_status(_session, _job, _type)
+                        if refreshed is not None:
+                            try:
+                                refreshed_play = int(refreshed.get("playTime") or 0) // 1000
+                            except (TypeError, ValueError):
+                                refreshed_play = 0
+                            if refreshed.get("isPassed") or (
+                                    duration > 0 and refreshed_play >= duration
+                            ):
+                                logger.info("服务端已确认任务点完成: {}", _job.get("name"))
+                                passed = True
+                                break
+                        if finish_submit_retry > max_finish_submit_retry:
+                            logger.warning(
+                                "任务 {} 已播放到 100%，补交 {} 次仍未判定通过，"
+                                "可能是服务端统计延迟，稍后重试该任务点",
+                                _job.get("name"), max_finish_submit_retry,
+                            )
+                            return StudyResult.ERROR
+                        # 补交间隔 1→8 秒递增，给服务端留出统计时间
+                        backoff = min(1.0 * finish_submit_retry, 8.0)
+                        logger.debug(
+                            "已到 100%，补交进度中 ({}/{}), {} 秒后再试",
+                            finish_submit_retry, max_finish_submit_retry, backoff,
+                        )
+                        time.sleep(backoff)
+                    else:
+                        wait_time = int(random.uniform(30, 90))
+                        last_log_time = play_time
 
                     logger.trace("Progress logged")
 
@@ -926,10 +1105,18 @@ class Chaoxing:
                     pbar = self._close_pbar_safe(pbar)
                 else:
                     if pbar is None:
-                        pbar = tqdm(total=duration, initial=int(play_time), desc=_job["name"],
+                        pbar = tqdm(total=duration, initial=int(play_time), desc=pbar_name,
                                     unit_scale=True, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}', leave=False)
-                    pbar.n = int(play_time)
-                    pbar.refresh()
+                    if play_time < duration:
+                        pbar.n = int(play_time)
+                        pbar.refresh()
+                    elif not finished_hint_shown:
+                        # 已播完、正等服务端判定：进度条固定满格，
+                        # 避免出现「100% 却一直不动」的观感；补交过程见日志。
+                        pbar.n = duration
+                        pbar.refresh()
+                        finished_hint_shown = True
+                        logger.info("视频已播放完毕，提交ing...（等待服务端确认完成）")
 
                 time.sleep(gc.THRESHOLD)
         finally:
@@ -1255,8 +1442,11 @@ class Chaoxing:
         cpi = str(_course.get("cpi", "") or questions.get("cpi", ""))
 
         # 1. 获取作答记录列表（提交后服务端异步生成记录，需稍作等待并多次重试）
+        # 这段最多要轮询 5 次、每次 20s 超时，以前没有任何日志，看起来就像「提交后卡死」，
+        # 所以每次都打一行进度提示。
         records = None
         for attempt in range(5):
+            logger.debug(f"查询章节检测成绩中 ({attempt + 1}/5)…")
             try:
                 resp = _session.get(
                     "https://mooc1.chaoxing.com/mooc-ans/work/record-list",

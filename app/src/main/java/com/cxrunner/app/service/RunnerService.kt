@@ -18,6 +18,7 @@ import com.cxrunner.app.data.AppConfig
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.CourseItem
 import com.cxrunner.app.data.InputRequest
+import com.cxrunner.app.data.ProgressStore
 import com.cxrunner.app.data.RunMode
 import com.cxrunner.app.data.RunnerController
 import com.cxrunner.app.data.SettingsStore
@@ -42,6 +43,9 @@ class RunnerService : Service() {
         const val EXTRA_SOURCE = "source"
         private const val CHANNEL_ID = "runner_channel"
         private const val NOTIF_ID = 20240921
+
+        /** 通知刷新间隔：视频进度每 0.4s 落一次盘，通知每秒刷一次足够，别把通知栏刷爆 */
+        private const val NOTICE_REFRESH_MS = 1000L
     }
 
     private var worker: Thread? = null
@@ -50,6 +54,18 @@ class RunnerService : Service() {
 
     /** 本次运行来源（"" = 手动，"定时启动" = 闹钟拉起） */
     private var runSource: String = ""
+
+    /** 没有实时进度时的兜底文案（等待输入 / 定时启动应答等） */
+    private var noticeText: String = "脚本正在后台运行…"
+
+    /** 上次刷新通知的时间戳，用于节流 */
+    private var lastNoticeRefresh: Long = 0L
+
+    /** 用户点了「停止」，此时通知固定显示「正在停止…」，不再跟视频进度 */
+    private var stopping: Boolean = false
+
+    /** 脚本已全部结束，通知固定在「已完成」文案上 */
+    private var finishedNotice: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -63,6 +79,11 @@ class RunnerService : Service() {
             ACTION_STOP -> {
                 RunnerController.requestStop()
                 RunnerController.setStatus("正在停止…")
+                // 立即把通知切到「正在停止」，否则视频进度还会继续刷，
+                // 用户点了停止却看不到任何反馈。
+                stopping = true
+                noticeText = "正在停止…"
+                updateNotification("正在停止…")
             }
             ACTION_START -> startRun(
                 intent.getStringExtra(EXTRA_MODE),
@@ -100,6 +121,8 @@ class RunnerService : Service() {
         }
 
         stopped = false
+        stopping = false
+        finishedNotice = false
         runSource = source ?: ""
         RunnerController.setRunning(true)
         RunnerController.setExitCode(null)
@@ -109,7 +132,8 @@ class RunnerService : Service() {
         RunnerController.setStatus("运行中（${mode.label}$sourceText）")
         RunnerController.bumpLog()
 
-        startForegroundCompat(buildNotification("脚本正在后台运行…"))
+        noticeText = "脚本正在后台运行…"
+        startForegroundCompat(buildNotification(noticeText))
 
         worker = Thread({
             val code = try {
@@ -177,7 +201,7 @@ class RunnerService : Service() {
                         // 是为了 APP 不在前台时也能应答。
                         if (runSource == ScheduleScheduler.SOURCE_LABEL && kind == "courses") {
                             RunnerController.respond(id, "")
-                            updateNotification("定时启动：默认刷全部课程")
+                            noticeText = "定时启动：默认刷全部课程"
                             RunnerController.bumpLog()
                         } else {
                             val courses = mutableListOf<CourseItem>()
@@ -202,22 +226,44 @@ class RunnerService : Service() {
                                     courses = courses,
                                 )
                             )
-                            updateNotification("等待输入…")
+                            noticeText = "等待输入…"
                         }
                     }
                 } else if (RunnerController.inputRequest.value != null) {
                     RunnerController.setInputRequest(null)
+                    noticeText = "脚本正在后台运行…"
                 }
 
-                // 2. 结束状态
+                // 2. 实时刷新通知里的视频进度（每秒最多一次，避免 notify 过频）
+                val nowTick = System.currentTimeMillis()
+                if (nowTick - lastNoticeRefresh >= NOTICE_REFRESH_MS) {
+                    lastNoticeRefresh = nowTick
+                    refreshRunNotification()
+                }
+
+                // 3. 结束状态
                 val statusFile = AppFiles.statusFile
                 if (statusFile.exists()) {
                     val st = JSONObject(statusFile.readText())
                     if (st.optString("state") == "finished") {
                         val code = st.optInt("code", 0)
+                        finishedNotice = true
                         RunnerController.setStatus("已结束（退出码 $code）")
                         RunnerController.setRunning(false)
-                        updateNotification("运行结束（退出码 $code）")
+                        // 全部任务跑完（退出码 0）时让通知停留 5 秒显示「已完成」，
+                        // 否则 stopForeground 会把通知直接抹掉，用户根本看不到结果。
+                        if (code == 0) {
+                            getSystemService(NotificationManager::class.java).notify(
+                                NOTIF_ID,
+                                buildNotification("所有课程任务已处理完毕", "超星脚本已完成"),
+                            )
+                            try {
+                                Thread.sleep(5000)
+                            } catch (_: InterruptedException) {
+                            }
+                        } else {
+                            updateNotification("运行结束（退出码 $code）")
+                        }
                         RunnerController.bumpLog()
                         stopForegroundCompat()
                         stopSelf()
@@ -278,21 +324,83 @@ class RunnerService : Service() {
         )
     }
 
-    private fun buildNotification(text: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(
+        text: String,
+        title: String = "超星脚本运行中",
+        progressPercent: Int? = null,
+        percentLabel: String? = null,
+    ): Notification {
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_run)
-            .setContentTitle("超星脚本运行中")
+            .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent())
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(0, "停止", stopIntent())
-            .build()
+
+        // 有视频在播时挂一条确定进度的进度条，通知面板里能直接看到百分比。
+        // 注意：100% 但服务端还没确认时也保持 determinate=100，不要突然消失。
+        if (progressPercent != null) {
+            val pct = progressPercent.coerceIn(0, 100)
+            builder.setProgress(100, pct, false)
+            builder.setSubText(percentLabel ?: "$pct%")
+        }
+        return builder.build()
     }
 
     private fun updateNotification(text: String) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIF_ID, buildNotification(text))
+    }
+
+    /**
+     * 刷新通知里的运行状态。
+     *
+     * 优先级：
+     *   1. 有视频任务在跑 → 显示**百分比最高**的那个任务的进度（多个任务里最靠前的那个，
+     *      通常就是最接近完成、用户最关心的）+ 同行标注并发进程数；
+     *   2. 没有视频进度 → 显示 [noticeText]（等待输入 / 定时启动应答等）；
+     *   3. 本轮任务全部完成 → 由 watchLoop 单独把标题换成「全部任务已完成」。
+     */
+    private fun refreshRunNotification(title: String = "超星脚本运行中") {
+        // 终态/停止中不要再拿旧的视频进度覆盖文案
+        if (finishedNotice || stopping) {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIF_ID, buildNotification(if (stopping) "正在停止…" else noticeText))
+            return
+        }
+        val items = ProgressStore.distinctByName(ProgressStore.read())
+        val nm = getSystemService(NotificationManager::class.java)
+
+        if (items.isNotEmpty()) {
+            // ProgressStore 已按百分比降序排好，first() 就是进度最大的那个
+            val lead = items.first()
+            val count = items.size
+            val detail = buildString {
+                append(lead.name)
+                // 提交中只显示时长会让人以为还在播（22:05/22:05 看起来像卡住），
+                // 换成「提交ing...」后这里只留文件名
+                if (!lead.submitting) {
+                    append("  ")
+                    append(lead.current)
+                    if (lead.total.isNotBlank()) {
+                        append('/')
+                        append(lead.total)
+                    }
+                }
+                if (count > 1) {
+                    append("   共 ")
+                    append(count)
+                    append(" 个进程")
+                }
+            }
+            nm.notify(NOTIF_ID, buildNotification(detail, title, lead.percent, lead.percentLabel))
+            return
+        }
+
+        nm.notify(NOTIF_ID, buildNotification(noticeText, title))
     }
 
     private fun startForegroundCompat(notification: Notification) {

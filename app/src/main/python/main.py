@@ -268,12 +268,16 @@ def process_job(chaoxing: Chaoxing, course: dict, job: dict, job_info: dict, spe
         )
         if video_result.is_failure():
             logger.warning("当前任务非视频任务, 正在尝试音频任务解码")
+            # 同一个任务点的重跑：进度条沿用原任务名，别让面板上多出一条
             video_result = chaoxing.study_video(
-                course, job, job_info, _speed=speed, _type="Audio")
+                course, job, job_info, _speed=speed, _type="Audio", _reuse_name=True)
         if video_result.is_failure():
             logger.warning(
                 f"出现异常任务 -> 任务章节: {course['title']} 任务ID: {job['jobid']}, 已跳过"
             )
+            # 失败/跳过也要把进度条收掉：study_video 里已经关过，这里再兜一次，
+            # 免得一条卡在 100% 的视频永远挂在 APP 的进度列表里
+            chaoxing._close_pbar_by_name(job.get("name"))
         return video_result
     # 文档任务
     elif job["type"] == "document":

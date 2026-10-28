@@ -5,6 +5,7 @@ import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.SettingsStore
+import com.cxrunner.app.data.UpdateManager
 import com.cxrunner.app.service.ScheduleScheduler
 
 class RunnerApp : Application() {
@@ -12,6 +13,8 @@ class RunnerApp : Application() {
         super.onCreate()
         AppFiles.init(this)
         SettingsStore.init(this)
+        // 版本检查只读 versionName + 本地 json，不联网，放这里没有开销
+        UpdateManager.init(this)
         AppFiles.prepare()
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))

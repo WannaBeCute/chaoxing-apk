@@ -19,6 +19,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cxrunner.app.data.ProgressItem
+import com.cxrunner.app.data.ProgressStore
 
 /**
  * 实时进度面板。
@@ -41,8 +43,11 @@ fun ProgressPanel(
     maxVisible: Int = 4,
     modifier: Modifier = Modifier,
 ) {
+    // 同名任务合并成一行：视频回退音频、章节重试都会让同一个视频被处理两次，
+    // 不合并就会看到同一个文件在列表里出现好几条
+    val rows = remember(items) { ProgressStore.distinctByName(items) }
     AnimatedVisibility(
-        visible = items.isNotEmpty(),
+        visible = rows.isNotEmpty(),
         enter = expandVertically() + fadeIn(),
         exit = shrinkVertically() + fadeOut(),
         modifier = modifier,
@@ -69,18 +74,18 @@ fun ProgressPanel(
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Text(
-                    " ${items.size} 个任务进行中",
+                    " ${rows.size} 个任务进行中",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            items.take(maxVisible).forEach { item ->
+            rows.take(maxVisible).forEach { item ->
                 ProgressRow(item)
             }
-            if (items.size > maxVisible) {
+            if (rows.size > maxVisible) {
                 Text(
-                    "另有 ${items.size - maxVisible} 个任务进行中…",
+                    "另有 ${rows.size - maxVisible} 个任务进行中…",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -103,7 +108,8 @@ private fun ProgressRow(item: ProgressItem) {
                 modifier = Modifier.weight(1f),
             )
             Text(
-                "${item.percent}%",
+                // 100% 之后脚本还在等服务端判定，显示「提交ing...」而不是干等着的 100%
+                item.percentLabel,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.primary,

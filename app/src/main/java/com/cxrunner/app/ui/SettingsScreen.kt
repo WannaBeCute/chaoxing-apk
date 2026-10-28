@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -16,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.Button
@@ -30,9 +33,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +52,9 @@ import com.cxrunner.app.data.LOG_FONT_SIZE_MIN
 import com.cxrunner.app.data.NOTIFY_PROVIDERS
 import com.cxrunner.app.data.RunMode
 import com.cxrunner.app.data.TIKU_PROVIDERS
+import com.cxrunner.app.data.UpdateCheckResult
+import com.cxrunner.app.data.UpdateManager
+import com.cxrunner.app.data.UpdateSource
 import com.cxrunner.app.data.parseConfigIni
 import com.cxrunner.app.data.renderConfigIni
 import com.cxrunner.app.ui.components.ActionButton
@@ -64,6 +73,12 @@ import com.cxrunner.app.ui.components.SwitchItem
 import com.cxrunner.app.ui.components.TextEditorDialog
 import com.cxrunner.app.ui.components.TextFieldItem
 import com.cxrunner.app.ui.components.TimeStepperItem
+import com.cxrunner.app.ui.components.UpdateAvailableDialog
+import com.cxrunner.app.ui.components.UpdateFailedDialog
+import com.cxrunner.app.ui.components.UpdateSourceDialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -90,6 +105,31 @@ fun SettingsScreen(
     var showFactoryReset by remember { mutableStateOf(false) }
     var showCoursePicker by remember { mutableStateOf(false) }
     var cachedCourses by remember { mutableStateOf(loadCachedCourses()) }
+
+    // ---------------- 检查更新 ----------------
+    var checking by remember { mutableStateOf(false) }
+    var updateResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
+    var showSourcePicker by remember { mutableStateOf(false) }
+    // 「不再提醒」的开关：读的是 UpdateManager 的持久化状态
+    var muteUpdate by remember { mutableStateOf(UpdateManager.isMuted()) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+
+    fun runCheck() {
+        if (checking) return
+        checking = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                UpdateManager.checkIfDue(UpdateManager.currentVersionLabel, force = true)
+            }
+            checking = false
+            updateResult = result
+            if (result is UpdateCheckResult.UpToDate) {
+                onToast("已是最新版本（${result.latest}）")
+            }
+        }
+    }
 
     // 「配置文件参数」收纳栏：默认收起；切到「按配置文件运行」时自动展开。
     // 从主页「大模型配置」卡片跳进来时（tikuExpanded）也直接展开。
@@ -501,6 +541,33 @@ fun SettingsScreen(
 
             } // end of if (configGroupExpanded)
 
+            // ---------------- 检查更新 ----------------
+            SectionCard(
+                title = "检查更新",
+                subtitle = "当前版本 ${UpdateManager.currentVersionLabel.ifBlank { "未知" }}",
+            ) {
+                ActionButton(
+                    text = if (checking) "正在检查…" else "检查更新",
+                    onClick = { runCheck() },
+                    enabled = !checking,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = Icons.Filled.Refresh,
+                )
+                Spacer(Modifier.height(6.dp))
+                MonoText("自动检查更新：每天一次，发现新版本时启动 APP 会提醒")
+                Spacer(Modifier.height(4.dp))
+                SwitchItem(
+                    label = "接收更新提醒",
+                    desc = "关闭后不再自动弹窗提醒，可随时在这里重新打开",
+                    checked = !muteUpdate,
+                    onCheckedChange = { enabled ->
+                        muteUpdate = !enabled
+                        UpdateManager.setMuted(!enabled)
+                        onToast(if (enabled) "已开启更新提醒" else "已关闭更新提醒")
+                    },
+                )
+            }
+
             // ---------------- 危险区 ----------------
             SectionCard(
                 title = "恢复出厂设置",
@@ -581,6 +648,60 @@ fun SettingsScreen(
             },
             onCancel = { showCoursePicker = false },
         )
+    }
+
+    // ---------------- 更新相关弹窗 ----------------
+    when (val r = updateResult) {
+        is UpdateCheckResult.Available -> {
+            if (!showSourcePicker) {
+                UpdateAvailableDialog(
+                    currentVersion = r.current,
+                    latestVersion = r.latest,
+                    notes = r.notes,
+                    // 手动检查时不提供「不再提醒」，避免误触就永久静音
+                    canMute = false,
+                    onOpenSourcePicker = {
+                        UpdateManager.markNotified(r.latest)
+                        showSourcePicker = true
+                    },
+                    onMuteAndClose = {
+                        UpdateManager.setMuted(true)
+                        muteUpdate = true
+                        updateResult = null
+                    },
+                    onClose = { updateResult = null },
+                )
+            } else {
+                UpdateSourceDialog(
+                    githubUrl = r.githubUrl,
+                    lanzou = r.lanzou,
+                    onOpen = { source ->
+                        runCatching { uriHandler.openUri(source.url) }
+                            .onFailure { onToast("无法打开浏览器：${it.message}") }
+                        showSourcePicker = false
+                        updateResult = null
+                    },
+                    onDismiss = {
+                        showSourcePicker = false
+                        updateResult = null
+                    },
+                )
+            }
+        }
+
+        is UpdateCheckResult.Failed -> {
+            UpdateFailedDialog(
+                reason = r.reason,
+                repoUrl = UpdateManager.REPO_URL,
+                onOpenRepo = {
+                    runCatching { uriHandler.openUri(UpdateManager.REPO_URL + "/releases") }
+                        .onFailure { onToast("无法打开浏览器：${it.message}") }
+                },
+                onDismiss = { updateResult = null },
+            )
+        }
+
+        else -> Unit
     }
 }
 

@@ -72,10 +72,27 @@ _ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # progress.json 的最小写入间隔（秒）：进度条刷新很密，节流一下避免频繁写盘
 _PROGRESS_FLUSH_INTERVAL = 0.4
 
+# 已收尾任务的「墓碑」记录保留时长（秒）：只用来挡住迟到的进度帧，
+# 超过这个时间同名的条目一定来自新任务，直接放行即可。
+_PROGRESS_DONE_TTL = 60.0
+
 
 def _strip_cursor_codes(text):
     """去掉光标控制类 ANSI 序列，保留 SGR 颜色码（m 结尾）。"""
     return _ANSI_CSI_RE.sub(lambda m: m.group(0) if m.group(0).endswith("m") else "", text)
+
+
+def _parse_timecode(tc):
+    """`08:12` / `1:02:03` -> 秒数；解析失败返回 0。"""
+    try:
+        parts = [int(p) for p in str(tc).split(":")]
+    except (TypeError, ValueError):
+        return 0
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -99,8 +116,12 @@ class LogWriter(io.TextIOBase):
         self._lock = threading.Lock()
         self.ring = collections.deque(maxlen=ring_size)
         self.progress_path = progress_path
-        # name -> {"pct", "cur", "total", "ts"}
+        # name -> {"pct", "cur", "total", "submitting", "ts"}
         self._progress = {}
+        # 已收尾任务 -> True，表示还有一条迟到帧要吞掉（见 _is_retired）
+        self._finished = {}
+        # 本次结算刚放行了一个「收尾后重启」的任务首帧，需要立刻写盘
+        self._pending_new_task = False
         self._last_progress_flush = 0.0
         # 收到 \r 后，后续内容属于"原地重画"，不进日志
         self._pending_overwrite = False
@@ -166,17 +187,61 @@ class LogWriter(io.TextIOBase):
         if m:
             name = (m.group("name") or "").strip()
             if name:
-                self._progress[name] = {
-                    "pct": int(m.group("pct")),
-                    "cur": m.group("cur"),
-                    "total": m.group("total"),
-                    "ts": time.time(),
-                }
-                self._maybe_flush_progress()
+                pct = int(m.group("pct"))
+                cur_s = _parse_timecode(m.group("cur"))
+                total_s = _parse_timecode(m.group("total"))
+                # tqdm 的百分比会向下取整，22:04/22:05 可能只显示 99%，
+                # 但此时视频其实已经播完、正在提交。所以「时长已到（含 1 秒取整误差）」
+                # 也算提交中——否则最后一两秒会一直是 99%，看起来像卡住。
+                submitting = pct >= 100 or (
+                    total_s > 0 and cur_s >= total_s - 1
+                )
+                if not self._is_retired(name, submitting):
+                    frame_ts = time.time()
+                    self._progress[name] = {
+                        "pct": 100 if submitting else pct,
+                        "cur": m.group("cur"),
+                        "total": m.group("total"),
+                        # 100% 之后脚本还在等服务端判定通过，这段时间对外显示
+                        # 「提交ing...」而不是干巴巴的 100%（见 Kotlin ProgressStore）
+                        "submitting": submitting,
+                        "ts": frame_ts,
+                    }
+                    if self._pending_new_task:
+                        # 新任务的首帧，跳过 0.4s 节流立刻写盘并撤掉旧墓碑
+                        self._pending_new_task = False
+                        self._finished.pop(name, None)
+                        self._last_progress_flush = frame_ts
+                        self._write_progress_file()
+                    else:
+                        self._maybe_flush_progress()
             text = text[m.end():].strip()
 
         if text:
             self._emit(text + "\n")
+
+    def _is_retired(self, name, submitting):
+        """该任务的这一帧是否属于「已经收尾、不该再出现」的残留。
+
+        tqdm 在 close() 时还会刷最后一帧，多线程下这帧可能晚于
+        clear_progress 结算，于是已完成的视频又被写回面板。墓碑不是
+        「这个名字永久屏蔽」：视频失败回退音频、章节重试都会用同一个
+        任务名重新来过，永久屏蔽会让新任务一直不显示。
+        """
+        stamp = self._finished.get(name)
+        if stamp is None:
+            return False
+        # 提交中的帧只可能来自旧进度条：任务收尾之后它已经被关掉了
+        if submitting:
+            return True
+        # 帧记下的时间早于最近一次写盘 ⇒ 属于上一轮积压下来的数据
+        if stamp > self._last_progress_flush:
+            return True
+        # 否则这是收尾之后才产生的帧，只可能是同名的新任务：
+        # 撤掉墓碑并立刻写盘，不然 0.4s 节流内下一帧还会被继续吞掉。
+        self._finished.pop(name, None)
+        self._pending_new_task = True
+        return False
 
     def _maybe_flush_progress(self):
         now = time.time()
@@ -196,21 +261,38 @@ class LogWriter(io.TextIOBase):
             payload = {
                 "time": time.time(),
                 "items": [
-                    {"name": name, "pct": v["pct"], "cur": v["cur"], "total": v["total"], "ts": v["ts"]}
+                    {"name": name, "pct": v["pct"], "cur": v["cur"], "total": v["total"],
+                     "submitting": v.get("submitting", v["pct"] >= 100), "ts": v["ts"]}
                     for name, v in self._progress.items()
                 ],
             }
             _atomic_write_json(self.progress_path, payload)
+            # 面板内容已经落盘，之前积压的墓碑没必要再留着：
+            # 再来的帧都是新任务，0.4s 一次的写盘也足够把旧残留盖掉。
+            self._finished.clear()
         except Exception:
             pass
 
     def clear_progress(self, name=None):
+        """任务收尾：从面板摘掉，并留下墓碑吃掉 tqdm 关闭时刷的那一帧。"""
         with self._lock:
             if name is None:
                 self._progress.clear()
+                self._finished.clear()
             else:
                 self._progress.pop(name, None)
+            # 必须先落盘再登记墓碑：写盘成功会清掉墓碑
             self._write_progress_file()
+            if name:
+                self._finished[name] = True
+                self._prune_finished()
+
+    def _prune_finished(self):
+        """墓碑只在两次写盘之间有意义：堆积过多时整体清空。"""
+        if len(self._finished) > 256:
+            # 正常一次运行最多几十个任务同时收尾；真上千了宁可漏一帧，
+            # 也不能让这个字典无限增长（下一帧就会把残留盖回去）。
+            self._finished.clear()
 
     def _emit(self, text):
         """把清理后的日志文本真正写入文件 + 环形缓冲。"""
