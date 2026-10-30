@@ -1,5 +1,3 @@
-> 已在[v1.2](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2)修复切后台异常停止任务的问题（#1，#2）
-
 <div align="center">
 
 # 超星刷课助手
