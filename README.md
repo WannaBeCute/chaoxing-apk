@@ -1,3 +1,5 @@
+> 紧急在[v1.2.1](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2.1)修复了刷课进程卡死的问题
+
 <div align="center">
 
 # 超星刷课助手
