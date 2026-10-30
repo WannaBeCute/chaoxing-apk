@@ -53,8 +53,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,7 +66,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import com.cxrunner.app.data.AppFiles
 import com.cxrunner.app.data.AppSettings
 import com.cxrunner.app.data.LOG_FONT_SIZE_MAX
@@ -104,39 +111,70 @@ fun MainScreen(
     val statusText by RunnerController.statusText.collectAsState()
     val inputRequest by RunnerController.inputRequest.collectAsState()
 
-    var logText by remember { mutableStateOf("") }
-    var logOffset by remember { mutableLongStateOf(0L) }
+    // 日志按行保存在快照列表里，读取放后台线程、增量追加。
+    // 旧实现每 800ms 在主线程把整个累积文本 String 拼接 + split 一遍、
+    // 超过 3000 行再 join 一遍，日志一大（几 MB）主线程就冻住，
+    // 表现就是"日志内容加载不出来"。现在：后台读增量 → 只切出完整行 →
+    // 追加到列表（上限 2000 行，更早的用「导出」拿完整文件）。
+    val logLines = remember { mutableStateListOf<String>() }
+    val logReadState = remember {
+        // offset / 半行残留 / 读锁都是非 UI 状态，包在一个 holder 里避免多个 remember
+        object {
+            var offset: Long = 0L
+            var partial: String = ""
+            val mutex = Mutex()
+        }
+    }
+    val ioScope = rememberCoroutineScope()
     var progress by remember { mutableStateOf(emptyList<ProgressItem>()) }
 
     val refreshPermission = remember { mutableStateOf(0) }
 
     fun readLog(reset: Boolean = false) {
-        val file = AppFiles.logFile
-        if (!file.exists()) {
-            if (reset) logText = ""
-            return
-        }
-        val len = file.length()
-        if (reset || len < logOffset) {
-            logOffset = 0
-            logText = ""
-        }
-        if (len > logOffset) {
-            try {
-                RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(logOffset)
-                    val size = (len - logOffset).toInt()
-                    val buffer = ByteArray(size)
-                    raf.readFully(buffer)
-                    logText += String(buffer, Charsets.UTF_8)
+        ioScope.launch(Dispatchers.IO) {
+            logReadState.mutex.withLock {
+                val file = AppFiles.logFile
+                if (!file.exists()) {
+                    if (reset) logReadState.offset = 0L
+                    return@withLock
                 }
-                logOffset = len
-                val lines = logText.split('\n')
-                if (lines.size > 3000) {
-                    logText = lines.takeLast(3000).joinToString("\n")
+                val len = file.length()
+                if (reset || len < logReadState.offset) {
+                    logReadState.offset = 0L
+                    logReadState.partial = ""
+                    withContext(Dispatchers.Main) { logLines.clear() }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+                if (len <= logReadState.offset) return@withLock
+                try {
+                    val chunk = RandomAccessFile(file, "r").use { raf ->
+                        raf.seek(logReadState.offset)
+                        val size = (len - logReadState.offset).toInt()
+                        val buffer = ByteArray(size)
+                        raf.readFully(buffer)
+                        String(buffer, Charsets.UTF_8)
+                    }
+                    logReadState.offset = len
+                    // 文件可能正好写到半行：完整行立即上屏，半行留到下一轮再拼
+                    val text = logReadState.partial + chunk
+                    val lastNl = text.lastIndexOf('\n')
+                    val newLines: List<String> = if (lastNl >= 0) {
+                        logReadState.partial = text.substring(lastNl + 1)
+                        text.substring(0, lastNl).split('\n')
+                    } else {
+                        logReadState.partial = text
+                        emptyList()
+                    }
+                    if (newLines.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            logLines.addAll(newLines)
+                            if (logLines.size > 2000) {
+                                logLines.subList(0, logLines.size - 2000).clear()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
@@ -352,7 +390,7 @@ fun MainScreen(
         )
 
         LogConsole(
-            text = logText,
+            lines = logLines,
             fontSize = settings.fontSize,
             autoRefresh = settings.autoRefresh,
             onAutoRefreshChange = { onSettingsChange(settings.copy(autoRefresh = it)) },
@@ -362,14 +400,17 @@ fun MainScreen(
                     AppFiles.logFile.writeText("")
                 } catch (_: Exception) {
                 }
-                logText = ""
-                logOffset = 0
+                logLines.clear()
+                logReadState.offset = 0L
+                logReadState.partial = ""
                 progress = emptyList()
                 onToast("日志已清除")
             },
             onExport = {
-                val name = exportLog(context)
-                onToast(if (name != null) "已导出到下载目录：$name" else "导出失败")
+                ioScope.launch(Dispatchers.IO) {
+                    val name = exportLog(context)
+                    onToast(if (name != null) "已导出到下载目录：$name" else "导出失败")
+                }
             },
             onZoomIn = { onSettingsChange(settings.copy(fontSize = (settings.fontSize + 1).coerceAtMost(LOG_FONT_SIZE_MAX))) },
             onZoomOut = { onSettingsChange(settings.copy(fontSize = (settings.fontSize - 1).coerceAtLeast(LOG_FONT_SIZE_MIN))) },

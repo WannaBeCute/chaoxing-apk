@@ -587,7 +587,10 @@ class TikuYanxi(Tiku):
                 # 'type':q_info['type'], #修复478题目类型与答案类型不符（不想写后处理了）
                 # 没用，就算有type和options，言溪题库还是可能返回类型不符，问了客服，type仅用于收集
             },
-            verify=False
+            verify=False,
+            # 不设超时的话，题库服务器挂起时 worker 线程会永久阻塞在这里
+            # （表现：进度不动、日志不刷、停止也停不下来）
+            timeout=30,
         )
         if res.status_code == 200:
             res_json = res.json()
@@ -803,7 +806,9 @@ class TikuLike(Tiku):
         self.balance_api = 'https://app.datam.site/api/v1/balance'
         self.homepage = 'https://www.datam.site'
         self._model = None
-        self._timeout = 300
+        # 原来是 300s：题库服务器挂起时单个 worker 会被卡满 5 分钟，
+        # 4 个并发下表现就是"进度全停"。60s 对一次答题查询足够宽裕。
+        self._timeout = 60
         self._retry = True
         self._retry_times = 3
         self._tokens = []
@@ -1142,7 +1147,8 @@ class TikuAdapter(Tiku):
                 'options': [sub(r'^[A-Za-z]\.?、?\s?', '', option) for option in options.split('\n')],
                 'type': type
             },
-            verify=False
+            verify=False,
+            timeout=30,
         )
         if res.status_code == 200:
             res_json = res.json()

@@ -34,14 +34,28 @@ def ocr_init() -> Optional[DdddOcr]:
 
     Returns: DdddOcr对象
     """
+    global OCR_UNAVAILABLE
     if not HAS_DDDDOCR:
+        OCR_UNAVAILABLE = True
         logger.warning("未检测到 ddddocr 依赖，自动验证码识别将不可用。如遇403限制请在浏览器端手动完成验证。")
         return None
     try:
         return DdddOcr(show_ad=False)
     except Exception as e:
+        OCR_UNAVAILABLE = True
         logger.warning(f"ddddocr 初始化失败: {e}，自动验证码识别将不可用")
         return None
+
+
+def ocr_unavailable() -> bool:
+    """OCR 是否确定不可用（结果粘性缓存，避免每次 403 都重复探测）。"""
+    return OCR_UNAVAILABLE
+
+
+# 一旦确认 ddddocr 不可用就置 True：本轮运行里所有验证码尝试都直接跳过。
+# 之前每次 403 都会重新初始化并尝试 3 轮，白白下载验证码图片、干等 2 秒×3，
+# 还泄漏临时 Session 的 SSL 连接（长时间运行后 fd 耗尽、所有请求失败）。
+OCR_UNAVAILABLE = False
 
 
 _MISSING = object()

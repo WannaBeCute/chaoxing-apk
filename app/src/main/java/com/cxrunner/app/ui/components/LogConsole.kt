@@ -62,10 +62,15 @@ import kotlin.math.roundToInt
 
 /**
  * 终端风格日志窗口：右侧带可拖动的滚动条与工具栏。
+ *
+ * 入参是**按行切好的日志列表**（增量追加，主线程只做列表更新）。
+ * ANSI 颜色解析下沉到每个可见行的 item 里（remember(line) 缓存）：
+ * LazyColumn 只组合可见行，所以解析成本与日志总量无关——
+ * 旧实现把整份文本 split + 全量解析放在重组里，日志一大 UI 就冻住。
  */
 @Composable
 fun LogConsole(
-    text: String,
+    lines: List<String>,
     fontSize: Int,
     autoRefresh: Boolean,
     onAutoRefreshChange: (Boolean) -> Unit,
@@ -83,18 +88,10 @@ fun LogConsole(
 
     // 日志里的 ANSI 颜色码在渲染时解析成 SpanStyle，控制字符一并清掉。
     val palette = rememberAnsiPalette()
-    val fallbackColor = if (text.isEmpty()) {
+    val fallbackColor = if (lines.isEmpty()) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
-    }
-    // 按行切分 + LazyColumn 渲染：整段丢给一个 Text 在 3000 行量级下
-    // 每次重组都要重新测量整块文本，日志刷不动、看起来就像"没有自动刷新"。
-    val lines = remember(text) { if (text.isEmpty()) emptyList() else text.split('\n') }
-    val displayLines = remember(lines, palette, fallbackColor) {
-        lines.map { line ->
-            if (line.isEmpty()) AnnotatedString("") else ansiToAnnotatedString(line, palette, fallbackColor)
-        }
     }
 
     Column(
@@ -153,9 +150,15 @@ fun LogConsole(
                             // 底部留白，避免最后一行被横向滚动条压住
                             contentPadding = PaddingValues(bottom = 10.dp),
                         ) {
-                            itemsIndexed(displayLines) { _, line ->
+                            itemsIndexed(lines) { _, line ->
+                                // ANSI 解析只在某行真正被组合（滚到可见）时执行一次并缓存，
+                                // 2000 行的日志滚得多快都不会卡。
+                                val rendered = remember(line) {
+                                    if (line.isEmpty()) AnnotatedString("")
+                                    else ansiToAnnotatedString(line, palette, fallbackColor)
+                                }
                                 Text(
-                                    text = line,
+                                    text = rendered,
                                     fontSize = fontSize.sp,
                                     lineHeight = (fontSize + 4).sp,
                                     fontFamily = FontFamily.Monospace,
@@ -219,6 +222,8 @@ fun LogConsole(
 
     // 新日志到来时自动滚动到底部。
     // 只在用户本来就贴着底部时才跟随，向上翻阅历史时不要把人强行拽回底部。
+    // LaunchedEffect 的 key 里带上首行内容：行数到达上限后"追加 + 截头"时
+    // size 可能不变，只按 size 判断会漏掉这次滚动。
     val atBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -226,7 +231,7 @@ fun LogConsole(
             last >= info.totalItemsCount - 2
         }
     }
-    LaunchedEffect(lines.size) {
+    LaunchedEffect(lines.size, lines.firstOrNull()) {
         if (atBottom && lines.isNotEmpty()) {
             listState.scrollToItem(lines.lastIndex)
         }

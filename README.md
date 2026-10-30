@@ -1,79 +1,23 @@
-> 已在[v1.2](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2)修复切后台异常停止任务的问题（#1，#2）
-
-<div align="center">
-
 # 超星刷课助手
 
-**这是一个无需root，无需命令行操作，完全免费，在安卓手机上就能使用的超星刷课工具**
-
-</div>
-
-## 简单说明
-
-此项目的脚本源码全部来自开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
-我将脚本打包成了一个可以在 Android 上**长期后台运行**的 APP，使得脚本可以一直在手机上全天24小时运行，避免了操作电脑或服务器的麻烦，非开发者也可以快速上手使用
+将开源项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing)（Python 命令行版刷课脚本）
+打包成一个可以在 Android 上**长期后台运行**的 APP，使得该原项目的刷课脚本让非开发者的普通人也能快速上手使用
 
 > 上游项目遵循 GPL-3.0，本工程同样遵循 GPL-3.0（全文见 [`LICENSE`](LICENSE)），仅用于学习交流，禁止用于盈利。
 >
+> 本仓库为 APK 打包源码：<https://github.com/WannaBeCute/chaoxing-apk>
+>
 > 本项目由AI辅助生成
 
-## 程序截图
+## 应用截图
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/b9479cae-43cb-469f-aa3d-40b4134ade26" width="300" />
+  <img src="https://github.com/user-attachments/assets/8a44982b-0cd3-4fe0-b22d-c0a0d09fbac3" width="300" />
   <img src="https://github.com/user-attachments/assets/de8e4f4a-2560-4260-b1ed-3670d1dbe70e" width="300" />
 </p>
 
 
-## 快速上手（来自[帮助文档](app/src/main/assets/help/quickstart.md)）
-
-1. **开启必要权限**：主页顶部有一排权限卡片，运行该程序需要这些权限，可以逐个都点一下
-
-   <p align="center">
-     <img src="app/src/main/assets/help/biyaoquanxian.jpeg" width="450" />
-   </p>
-
-2. **选择运行模式并运行**：如果只是临时使用一下，选择「直接运行」模式再点击运行，接着按系统提示完成操作即可。
-
-   **【推荐】** 使用该程序最好选择「按配置文件运行」模式，以应对长期使用和多功能的需求（比如刷题，通知）。最好先打开设置，填写账号和密码，再选择「按配置文件运行」模式运行，之后就不用再填账号和密码
-
-   <p align="center">
-     <img src="app/src/main/assets/help/home.jpeg" width="450" />
-   </p>
-   <p align="center">
-     <img src="app/src/main/assets/help/input.jpeg" width="450" />
-   </p>
-
-> 登录成功后，会显示课程列表，可以手动选择要刷的课程
-  <p align="center">
-    <img src="app/src/main/assets/help/course_list.jpeg" width="450" />
-  </p>
-
-   
-3. **进程判断**：「开始运行」后，日志区上方会显示进度条。如果开启了刷题，日志区内也可以查看。若运行后出现异常停止任务的情况(退出码不为0)，可以滑动日志至底部查看原因
-  <p align="center">
-    <img src="app/src/main/assets/help/process.jpeg" width="450" />
-  </p>
-
-> 退出码为0时代表程序正常退出(比如刷课任务完成,用户手动停止等)
-  <p align="center">
-    <img src="app/src/main/assets/help/normal_run.jpeg" width="450" />
-  </p>
-
-4. **AI答题**：如果想自动刷题，必须要调用AI大模型的api。右上角「设置」→「配置文件参数」→「题库区」，选择"AI"，补充三个字段值即可（需要在api开放平台获取）。答题行为需要在「行为区」里设置。
-  <p align="center">
-    <img src="app/src/main/assets/help/ai_dingdian.jpeg" width="450" />
-  </p>
-  <p align="center">
-    <img src="app/src/main/assets/help/behavior.jpeg" width="450" />
-  </p>
-
-
-
 ---
-
-> 注：下面的内容主要是给开发此项目的智能体看的。要安装程序请跳转到[Release](https://github.com/WannaBeCute/chaoxing-apk/releases/tag/v1.2)
-
 
 ## 一、整体方案
 

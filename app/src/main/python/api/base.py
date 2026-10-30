@@ -36,6 +36,19 @@ def get_timestamp():
     return str(int(time.time() * 1000))
 
 
+def _captcha_ocr_unavailable() -> bool:
+    """验证码 OCR 是否确定不可用（粘性：一旦失败本轮运行不再尝试）。
+
+    Android 包里没有 ddddocr，每次 403 都重新探测 + 3 轮通关尝试纯属浪费：
+    下载验证码图片、干等 2 秒×3，还泄漏临时 Session 的 SSL 连接。
+    """
+    try:
+        from api.captcha import ocr_unavailable
+        return ocr_unavailable()
+    except Exception:
+        return False
+
+
 class SessionManager:
     _instance = None
     _login_lock = threading.Lock()
@@ -726,6 +739,12 @@ class Chaoxing:
             params.update({"rt": rt_val, "_t": get_timestamp()})
             res = _session.get(_url, params=params, headers=headers)
             if res.status_code == 403 or '验证码' in res.text or 'validate' in res.text:
+                # OCR 不可用时（ddddocr 没打进 APK）验证码必然通不过，
+                # 每次都白下载验证码图片 + 干等 3×2 秒，还会泄漏连接；
+                # 直接放弃并返回原响应，让上层的 403 恢复逻辑去处理。
+                if _captcha_ocr_unavailable():
+                    logger.warning("验证码拦截，但 OCR 不可用，跳过自动通关（如反复出现请在浏览器端完成验证）")
+                    return res
                 logger.warning("检测到验证码拦截，正在尝试自动通过验证码...")
                 try:
                     from api.captcha import CxCaptcha
@@ -737,22 +756,33 @@ class Chaoxing:
                         ocr_inst = ocr_init()
                         if ocr_inst:
                             self._ocr = ocr_inst
+                    if ocr_inst is None:
+                        logger.warning("OCR 初始化失败，跳过自动通关")
+                        return res
                     captcha_solver = CxCaptcha(user_agent=ua, cookies=cookies_str, ocr=ocr_inst)
-                    solved = False
-                    for attempt in range(3):
-                        logger.info(f"第 {attempt + 1} 次尝试通关验证码...")
-                        if captcha_solver.try_pass():
-                            logger.success("验证码通关成功！")
-                            solved = True
-                            break
+                    try:
+                        solved = False
+                        for attempt in range(3):
+                            logger.info(f"第 {attempt + 1} 次尝试通关验证码...")
+                            if captcha_solver.try_pass():
+                                logger.success("验证码通关成功！")
+                                solved = True
+                                break
+                            else:
+                                logger.warning("验证码验证失败，正在重试...")
+                                time.sleep(2)
+                        if solved:
+                            _session.cookies.update(captcha_solver.s.cookies)
+                            res = _session.get(_url, params=params, headers=headers)
                         else:
-                            logger.warning("验证码验证失败，正在重试...")
-                            time.sleep(2)
-                    if solved:
-                        _session.cookies.update(captcha_solver.s.cookies)
-                        res = _session.get(_url, params=params, headers=headers)
-                    else:
-                        logger.error("多次验证码通关失败，可能需要手动干预。")
+                            logger.error("多次验证码通关失败，可能需要手动干预。")
+                    finally:
+                        # 临时 Session 必须关掉：每个 403 轮次泄漏的 SSL 连接
+                        # 会累积成 fd 耗尽，之后所有网络请求全部失败（真机已踩过）
+                        try:
+                            captcha_solver.s.close()
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error(f"验证码通关逻辑异常: {e}")
             return res
@@ -1070,12 +1100,18 @@ class Chaoxing:
                                 passed = True
                                 break
                         if finish_submit_retry > max_finish_submit_retry:
+                            # 视频确实已播完、进度也上报了 7 次，只是服务端迟迟不回
+                            # isPassed。这里必须返回 SUCCESS 而不是 ERROR：
+                            # ERROR 会触发 process_job 的「音频回退」（把同一个已播完的
+                            # 任务点再当音频放一遍）+ 章节重排队（整个流程再来 5 轮），
+                            # 表现就是进度面板上一条 100% 的视频卡住一两分钟、来回出现。
+                            # 服务端确认晚到时再跑一轮脚本自然会跳过它。
                             logger.warning(
                                 "任务 {} 已播放到 100%，补交 {} 次仍未判定通过，"
-                                "可能是服务端统计延迟，稍后重试该任务点",
+                                "视为已完成（服务端确认可能有延迟）",
                                 _job.get("name"), max_finish_submit_retry,
                             )
-                            return StudyResult.ERROR
+                            return StudyResult.SUCCESS
                         # 补交间隔 1→8 秒递增，给服务端留出统计时间
                         backoff = min(1.0 * finish_submit_retry, 8.0)
                         logger.debug(

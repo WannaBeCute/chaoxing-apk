@@ -46,6 +46,16 @@ class RunnerService : Service() {
 
         /** 通知刷新间隔：视频进度每 0.4s 落一次盘，通知每秒刷一次足够，别把通知栏刷爆 */
         private const val NOTICE_REFRESH_MS = 1000L
+
+        /**
+         * 停止无响应多久后强制结束进程。
+         *
+         * 正常停止链路：看门狗 0.5s 内投递中断 → worker 收尾（≤5s）→ status.json
+         * 写成 finished → 这边立刻感知，全程 7s 内。超过 15s 还没结束，说明 Python
+         * 解释器已经卡死（真机见过：锁内 I/O 停滞、网络栈挂死），唯一的出路就是
+         * 结束整个进程——留着只会永远卡在「正在停止」。
+         */
+        private const val FORCE_STOP_AFTER_MS = 15_000L
     }
 
     private var worker: Thread? = null
@@ -63,6 +73,9 @@ class RunnerService : Service() {
 
     /** 用户点了「停止」，此时通知固定显示「正在停止…」，不再跟视频进度 */
     private var stopping: Boolean = false
+
+    /** 点停止的时间戳；超过 [FORCE_STOP_AFTER_MS] 仍未结束就强制结束进程 */
+    private var stopRequestedAt: Long = 0L
 
     /** 脚本已全部结束，通知固定在「已完成」文案上 */
     private var finishedNotice: Boolean = false
@@ -82,6 +95,7 @@ class RunnerService : Service() {
                 // 立即把通知切到「正在停止」，否则视频进度还会继续刷，
                 // 用户点了停止却看不到任何反馈。
                 stopping = true
+                stopRequestedAt = System.currentTimeMillis()
                 noticeText = "正在停止…"
                 updateNotification("正在停止…")
             }
@@ -122,6 +136,7 @@ class RunnerService : Service() {
 
         stopped = false
         stopping = false
+        stopRequestedAt = 0L
         finishedNotice = false
         runSource = source ?: ""
         RunnerController.setRunning(true)
@@ -239,6 +254,28 @@ class RunnerService : Service() {
                 if (nowTick - lastNoticeRefresh >= NOTICE_REFRESH_MS) {
                     lastNoticeRefresh = nowTick
                     refreshRunNotification()
+                }
+
+                // 2.5 停止无响应兜底：Python 解释器卡死时（锁内 I/O 停滞、网络栈
+                // 挂死都见过），stop.flag 永远没人消费，status.json 永远不会写成
+                // finished，APP 只能永远停在「正在停止」。等够宽限时间后直接结束
+                // 进程——这是唯一可靠的出路，界面上也会留下说明。
+                if (stopping && stopRequestedAt > 0L &&
+                    nowTick - stopRequestedAt >= FORCE_STOP_AFTER_MS
+                ) {
+                    try {
+                        AppFiles.logFile.appendText(
+                            "\n[APP] 脚本在 ${FORCE_STOP_AFTER_MS / 1000} 秒内没有响应停止指令，已强制结束进程\n" +
+                            "[APP] 这通常意味着脚本内部卡死（可能是网络请求无响应或存储 I/O 停滞），\n" +
+                            "[APP] 请把日志末尾的内容反馈给开发者。\n"
+                        )
+                    } catch (_: Exception) {
+                    }
+                    RunnerController.setStatus("已强制结束（脚本无响应）")
+                    RunnerController.setRunning(false)
+                    stopForegroundCompat()
+                    stopSelf()
+                    Runtime.getRuntime().exit(0)
                 }
 
                 // 3. 结束状态

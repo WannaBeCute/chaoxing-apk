@@ -122,6 +122,8 @@ class LogWriter(io.TextIOBase):
         self._finished = {}
         # 本次结算刚放行了一个「收尾后重启」的任务首帧，需要立刻写盘
         self._pending_new_task = False
+        # 拿不到日志锁时被丢弃的输出条数（见 write()）
+        self._dropped = 0
         self._last_progress_flush = 0.0
         # 收到 \r 后，后续内容属于"原地重画"，不进日志
         self._pending_overwrite = False
@@ -142,7 +144,19 @@ class LogWriter(io.TextIOBase):
             except Exception:
                 s = str(s)
 
-        with self._lock:
+        # 限时拿锁：正常情况下锁内只有内存操作 + 一次小文件写入（微秒级），
+        # 3 秒都拿不到说明有线程卡死在锁里（比如 fsync 撞上存储 I/O 停滞）。
+        # 这时宁可丢掉这一条日志也不能让**所有**线程排在锁后面——那会让
+        # 整个解释器看起来彻底冻结，连停止都停不下来（真机已踩过）。
+        if not self._lock.acquire(timeout=3.0):
+            self._dropped += 1
+            if self._dropped % 50 == 1:
+                try:
+                    self._emit("[LogWriter] 日志锁超时，已丢弃 %d 条输出\n" % self._dropped)
+                except Exception:
+                    pass
+            return len(s)
+        try:
             for part in _LINE_SPLIT_RE.split(s):
                 if part in ("\n", "\r\n"):
                     # 真正的换行：本行结束，落地待写内容 + 处理重画残留
@@ -159,6 +173,8 @@ class LogWriter(io.TextIOBase):
                         self._overwrite_text += part
                     else:
                         self._pending_text += part
+        finally:
+            self._lock.release()
 
         return len(s)
 
@@ -251,8 +267,12 @@ class LogWriter(io.TextIOBase):
         self._write_progress_file()
 
     def flush_progress(self):
-        with self._lock:
+        if not self._lock.acquire(timeout=3.0):
+            return
+        try:
             self._write_progress_file()
+        finally:
+            self._lock.release()
 
     def _write_progress_file(self):
         if not self.progress_path:
@@ -266,7 +286,7 @@ class LogWriter(io.TextIOBase):
                     for name, v in self._progress.items()
                 ],
             }
-            _atomic_write_json(self.progress_path, payload)
+            _atomic_write_json(self.progress_path, payload, sync=False)
             # 面板内容已经落盘，之前积压的墓碑没必要再留着：
             # 再来的帧都是新任务，0.4s 一次的写盘也足够把旧残留盖掉。
             self._finished.clear()
@@ -274,8 +294,15 @@ class LogWriter(io.TextIOBase):
             pass
 
     def clear_progress(self, name=None):
-        """任务收尾：从面板摘掉，并留下墓碑吃掉 tqdm 关闭时刷的那一帧。"""
-        with self._lock:
+        """任务收尾：从面板摘掉，并留下墓碑吃掉 tqdm 关闭时刷的那一帧。
+
+        限时拿锁：停止时 worker 线程的收尾都会走到这里，如果锁被某个
+        卡死的线程占着，无限等待就会把整条停止链路拖死。
+        拿不到锁就直接放弃（面板上残留一条旧进度，比卡死好得多）。
+        """
+        if not self._lock.acquire(timeout=3.0):
+            return
+        try:
             if name is None:
                 self._progress.clear()
                 self._finished.clear()
@@ -286,6 +313,8 @@ class LogWriter(io.TextIOBase):
             if name:
                 self._finished[name] = True
                 self._prune_finished()
+        finally:
+            self._lock.release()
 
     def _prune_finished(self):
         """墓碑只在两次写盘之间有意义：堆积过多时整体清空。"""
@@ -341,12 +370,16 @@ def _log(text):
 # --------------------------------------------------------------------------- #
 # 原子文件读写
 # --------------------------------------------------------------------------- #
-def _atomic_write_json(path, obj):
+def _atomic_write_json(path, obj, sync=True):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False)
         f.flush()
-        os.fsync(f.fileno())
+        if sync:
+            # fsync 保证断电/被杀时状态文件不丢，但一次要几毫秒到几十毫秒；
+            # progress.json 每 0.4s 写一次且在日志锁内调用，fsync 撞上存储
+            # I/O 停滞时会把所有等锁的线程拖死，所以进度文件不做 sync。
+            os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
